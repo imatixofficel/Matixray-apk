@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui
 
+import android.content.Intent
 import android.os.Bundle
 import android.webkit.WebView
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.v2ray.ang.AppConfig
 import com.v2ray.ang.BuildConfig
 import com.v2ray.ang.R
 import com.v2ray.ang.core.CoreNativeManager
@@ -34,6 +36,7 @@ import com.v2ray.ang.ui.compose.AppTopBar
 import com.v2ray.ang.ui.compose.NavigationBarsSpacer
 import com.v2ray.ang.ui.compose.SettingsMenuItem
 import com.v2ray.ang.ui.compose.VersionInfoBlock
+import com.v2ray.ang.util.Utils
 
 class AboutActivity : BaseComponentActivity() {
 
@@ -43,12 +46,20 @@ class AboutActivity : BaseComponentActivity() {
 
     @Composable
     override fun ScreenContent() {
-        AboutScreen(onBackClick = { finish() })
+        AboutScreen(
+            onBackClick = { finish() },
+            onTranslatorsClick = {
+                startActivity(Intent(this, TranslatorsActivity::class.java))
+            }
+        )
     }
 }
 
 @Composable
-fun AboutScreen(onBackClick: () -> Unit) {
+fun AboutScreen(
+    onBackClick: () -> Unit,
+    onTranslatorsClick: () -> Unit
+) {
     val context = LocalContext.current
     var showOssDialog by remember { mutableStateOf(false) }
 
@@ -72,9 +83,42 @@ fun AboutScreen(onBackClick: () -> Unit) {
                 .verticalScroll(rememberScrollState())
         ) {
             SettingsMenuItem(
+                icon = painterResource(R.drawable.ic_source_code_24dp),
+                title = stringResource(R.string.title_source_code),
+                onClick = { Utils.openUri(context, AppConfig.APP_URL) }
+            )
+            SettingsMenuItem(
                 icon = painterResource(R.drawable.license_24px),
                 title = stringResource(R.string.title_oss_license),
                 onClick = { showOssDialog = true }
+            )
+            // The Aether binary is not a Gradle dependency, so the generated license report
+            // cannot list it; its AGPL-3.0 notice and source link live here instead.
+            SettingsMenuItem(
+                icon = painterResource(R.drawable.license_24px),
+                title = stringResource(R.string.title_aether_core),
+                subtitle = stringResource(R.string.summary_aether_core),
+                onClick = { Utils.openUri(context, AppConfig.AETHER_URL) }
+            )
+            SettingsMenuItem(
+                icon = painterResource(R.drawable.ic_translate_24dp),
+                title = stringResource(R.string.title_translators),
+                onClick = onTranslatorsClick
+            )
+            SettingsMenuItem(
+                icon = painterResource(R.drawable.ic_feedback_24dp),
+                title = stringResource(R.string.title_pref_feedback),
+                onClick = { Utils.openUri(context, AppConfig.APP_ISSUES_URL) }
+            )
+            SettingsMenuItem(
+                icon = painterResource(R.drawable.ic_telegram_24dp),
+                title = stringResource(R.string.title_tg_channel),
+                onClick = { Utils.openUri(context, AppConfig.TG_CHANNEL_URL) }
+            )
+            SettingsMenuItem(
+                icon = painterResource(R.drawable.ic_privacy_24dp),
+                title = stringResource(R.string.title_privacy_policy),
+                onClick = { Utils.openUri(context, AppConfig.APP_PRIVACY_POLICY) }
             )
             VersionInfoBlock(
                 versionText = versionText,

@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Matixray"
+rootProject.name = "v2rayNG"
 include(":app")

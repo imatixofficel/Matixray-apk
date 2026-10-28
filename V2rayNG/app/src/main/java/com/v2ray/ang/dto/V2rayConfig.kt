@@ -106,7 +106,6 @@ data class V2rayConfig(
             var reserved: List<Int>? = null,
             var mtu: Int? = null,
             var remoteDNS: List<String>? = null,
-            var domainStrategy: String? = null,
         ) {
             data class WireGuardBean(
                 var publicKey: String = "",
@@ -232,7 +231,7 @@ data class V2rayConfig(
                 val enableSessionResumption: Boolean? = null,
                 var echConfigList: String? = null,
                 var echSockopt: SockoptBean? = null,
-                // the profile's ECH outbound as written, which EchOutbound.serialize checks, links and
+                // PattNG: the profile's ECH outbound as written, which EchOutbound.serialize checks, links and
                 // appends; never serialized
                 @Transient var echOutbound: String? = null,
                 var verifyPeerCertByName: String? = null,
@@ -265,6 +264,7 @@ data class V2rayConfig(
                 var auth: String? = null
             )
 
+            //https://xtls.github.io/config/transport.html#finalmaskobject
             data class FinalMaskBean(
                 var tcp: List<MaskBean>? = null,
                 var udp: List<MaskBean>? = null,

@@ -2,7 +2,9 @@ package com.v2ray.ang.core
 
 import android.util.Log
 import com.google.gson.JsonParser
+import com.v2ray.ang.AppConfig
 import com.v2ray.ang.R
+import com.v2ray.ang.dto.V2rayConfig
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.AetherFingerprint
 import com.v2ray.ang.enums.AetherIpVersion
@@ -36,11 +38,17 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
 class AetherCoreManagerTest {
@@ -92,6 +100,25 @@ class AetherCoreManagerTest {
         assertEquals("wg", valueAfter(AetherCoreManager.buildArguments(profile(AetherProtocol.WIREGUARD), 10819), "--protocol"))
         assertEquals("gool", valueAfter(AetherCoreManager.buildArguments(profile(AetherProtocol.GOOL), 10819), "--protocol"))
         assertEquals("mim", valueAfter(AetherCoreManager.buildArguments(profile(AetherProtocol.MIM), 10819), "--protocol"))
+        // Gool is WireGuard over MASQUE to the core; WARP-in-WARP is its classic gool, asked for by name.
+        assertEquals("gool", valueAfter(AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE), 10819), "--protocol"))
+        assertTrue("--gool-classic" in AetherCoreManager.buildArguments(profile(AetherProtocol.GOOL), 10819))
+        assertTrue("--gool-classic" in AetherCoreManager.buildArguments(profile(AetherProtocol.GOOL), 0, scan = true))
+        for (protocol in AetherProtocol.entries - AetherProtocol.GOOL) {
+            assertFalse("--gool-classic" in AetherCoreManager.buildArguments(profile(protocol), 10819), protocol.type)
+        }
+    }
+
+    @Test
+    fun theProtocolOfTheArgumentsOfAProfileIsTheProfiles() {
+        for (protocol in AetherProtocol.entries) {
+            for (scan in listOf(false, true)) {
+                val hopless = AetherCoreManager.buildArguments(profile(protocol), 10819, scan)
+                assertEquals(protocol, AetherCoreManager.protocolOf(hopless), "${protocol.type} scan=$scan")
+                val hops = AetherCoreManager.buildArguments(profile(protocol, outer = "162.159.192.1:443", inner = "188.114.96.1:2408"), 10819, scan)
+                assertEquals(protocol, AetherCoreManager.protocolOf(hops), "${protocol.type} hops scan=$scan")
+            }
+        }
     }
 
     @Test
@@ -101,7 +128,9 @@ class AetherCoreManagerTest {
 
         val http2 = AetherCoreManager.buildArguments(profile(transport = AetherTransport.HTTP2), 10819)
         assertTrue(http2.contains("--h2"))
+        // Off is no flag at all: the core fragments nothing unless told to, and has no flag for off.
         assertFalse(http2.contains("--fragment"))
+        assertFalse(http2.contains("--no-fragment"))
 
         val fragmented = AetherCoreManager.buildArguments(profile(transport = AetherTransport.HTTP2, fragment = true), 10819)
         assertTrue(fragmented.contains("--fragment"))
@@ -112,6 +141,12 @@ class AetherCoreManagerTest {
         )
         assertFalse(wireguard.contains("--h2"))
         assertFalse(wireguard.contains("--fragment"))
+
+        // WireGuard over MASQUE rides the MASQUE carrier chosen here, as the WireGuard inside it does.
+        val goolOverMasque = AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE, AetherTransport.HTTP2, fragment = true), 10819)
+        assertTrue(goolOverMasque.contains("--h2"))
+        assertTrue(goolOverMasque.contains("--fragment"))
+        assertFalse(AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE, AetherTransport.HTTP2), 10819).contains("--fragment"))
 
         // Both masque-in-masque hops ride on the carrier chosen here.
         val mim = AetherCoreManager.buildArguments(profile(AetherProtocol.MIM, AetherTransport.HTTP2, fragment = true), 10819)
@@ -131,6 +166,7 @@ class AetherCoreManagerTest {
         assertEquals("5", valueAfter(arguments, "--fragment-delay"))
 
         val off = AetherCoreManager.buildArguments(tuned.copy(aetherFragment = false), 10819)
+        assertFalse(off.contains("--fragment"))
         assertFalse(off.contains("--fragment-size"))
         assertFalse(off.contains("--fragment-delay"))
 
@@ -179,6 +215,48 @@ class AetherCoreManagerTest {
         assertEquals("188.114.96.1:894", valueAfter(arguments, "--wiw-inner"))
         assertFalse(arguments.contains("--wiw-scan"))
         assertFalse(arguments.contains("--peer"))
+        assertTrue(arguments.contains("--gool-classic"))
+        assertFalse(arguments.contains("--gool-peer"))
+    }
+
+    @Test
+    fun wireGuardOverMasqueDialsItsGatewayAndItsWireGuardEndpointByTheirOwnFlags() {
+        val named = AetherCoreManager.buildArguments(
+            profile(AetherProtocol.WG_OVER_MASQUE, outer = "162.159.198.1:443", inner = "162.159.192.1:2408"),
+            10819
+        )
+        assertEquals("162.159.198.1:443", valueAfter(named, "--peer"))
+        assertEquals("162.159.192.1:2408", valueAfter(named, "--gool-peer"))
+        // No classic gool word: any of them would turn the core to WireGuard in WireGuard.
+        for (flag in listOf("--gool-classic", "--wiw-outer", "--wiw-inner", "--wiw-scan", "--mim-outer", "--mim-inner", "--mim-scan")) {
+            assertFalse(named.contains(flag), flag)
+        }
+        // The same address on both hops is no problem for the core here.
+        val shared = AetherCoreManager.buildArguments(
+            profile(AetherProtocol.WG_OVER_MASQUE, outer = "162.159.192.1:443", inner = "162.159.192.1:2408"),
+            10819
+        )
+        assertEquals("162.159.192.1:443", valueAfter(shared, "--peer"))
+        assertEquals("162.159.192.1:2408", valueAfter(shared, "--gool-peer"))
+
+        // Left blank, the gateway is scanned for and the WireGuard endpoint is the one WARP assigns.
+        val blank = AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE, server = "162.159.198.1", port = "443"), 10819)
+        assertFalse(blank.contains("--peer"))
+        assertFalse(blank.contains("--gool-peer"))
+        assertFalse(blank.contains("--wiw-scan"))
+        val malformed = AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE, outer = "162.159.198.1", inner = "x:2408"), 10819)
+        assertFalse(malformed.contains("--peer"))
+        assertFalse(malformed.contains("--gool-peer"))
+
+        // A scan looks for the gateway afresh and keeps the WireGuard endpoint the session dials.
+        val scan = AetherCoreManager.buildArguments(
+            profile(AetherProtocol.WG_OVER_MASQUE, outer = "162.159.198.1:443", inner = "162.159.192.1:2408"),
+            0,
+            scan = true
+        )
+        assertFalse(scan.contains("--peer"))
+        assertEquals("162.159.192.1:2408", valueAfter(scan, "--gool-peer"))
+        assertTrue(scan.contains("--no-quick-reconnect"))
     }
 
     @Test
@@ -192,6 +270,7 @@ class AetherCoreManagerTest {
     @Test
     fun goolScansForHopsItCannotUse() {
         assertTrue(AetherCoreManager.buildArguments(profile(AetherProtocol.GOOL), 10819).contains("--wiw-scan"))
+        assertTrue(AetherCoreManager.buildArguments(profile(AetherProtocol.GOOL), 10819).contains("--gool-classic"))
 
         val malformed = AetherCoreManager.buildArguments(profile(AetherProtocol.GOOL, outer = "162.159.192.1"), 10819)
         assertNull(valueAfter(malformed, "--wiw-outer"))
@@ -270,6 +349,7 @@ class AetherCoreManagerTest {
         assertFalse(scan.contains("--wiw-outer"))
         assertFalse(scan.contains("--wiw-inner"))
         assertTrue(scan.contains("--wiw-scan"))
+        assertTrue(scan.contains("--gool-classic"))
     }
 
     @Test
@@ -422,7 +502,8 @@ class AetherCoreManagerTest {
     @Test
     fun theSessionProtocolIsReadFromItsArguments() {
         val gool = listOf("/data/app/lib/libaether.so", "--bind", "127.0.0.1:10819", "--protocol", "gool", "--scan", "balanced")
-        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(gool))
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(gool))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(gool + "--gool-classic"))
         assertEquals(AetherProtocol.WIREGUARD, AetherCoreManager.protocolOf(listOf("/data/app/lib/libaether.so", "--protocol", "wg")))
         assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf("/data/app/lib/libaether.so", "--protocol")))
         assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(emptyList()))
@@ -433,18 +514,37 @@ class AetherCoreManagerTest {
         val bin = "/data/app/lib/libaether.so"
         assertEquals(AetherProtocol.WIREGUARD, AetherCoreManager.protocolOf(listOf(bin, "--wg")))
         assertEquals(AetherProtocol.WIREGUARD, AetherCoreManager.protocolOf(listOf(bin, "--warp")))
-        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--wiw")))
+        // Gool is WireGuard over MASQUE, as aether 2.3.0 reads it.
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--wiw")))
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--gool")))
         assertEquals(AetherProtocol.MIM, AetherCoreManager.protocolOf(listOf(bin, "--mim")))
         assertEquals(AetherProtocol.MIM, AetherCoreManager.protocolOf(listOf(bin, "--masque-in-masque")))
         assertEquals(AetherProtocol.MIM, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "mim")))
         // After --protocol the core takes other names as well, in any case; an unknown one is masque.
         assertEquals(AetherProtocol.MIM, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "M2")))
-        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "warp-in-warp")))
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "warp-in-warp")))
+        // The app's own word for it is no word of the core's, which runs MASQUE on it.
+        assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "wg-over-masque")))
         assertEquals(AetherProtocol.WIREGUARD, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "WireGuard")))
         assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--wg", "--protocol", "something-else")))
         // The last word wins, as it does for the core.
-        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--wg", "--protocol", "gool")))
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--wg", "--protocol", "gool")))
         assertEquals(AetherProtocol.WIREGUARD, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "gool", "--wg")))
+        assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--gool-classic", "--masque")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--wg", "--gool-classic")))
+        // --gool-peer selects gool as well, WireGuard over MASQUE unless something makes it the classic one.
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--gool-peer", "162.159.192.1:2408")))
+        // --gool-classic, a warp-in-warp hop or a scan of the hops makes it the classic gool, wherever they stand.
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--gool-classic")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--gool-classic", "--protocol", "gool")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--gool", "--wiw-scan")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--gool-scan", "--protocol", "gool")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--protocol", "gool", "--gool-peers", "auto")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--gool", "--wiw-inner", "188.114.96.1:894")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--gool-peer", "162.159.192.1:2408", "--wiw-scan")))
+        // A blank value sets nothing for the core.
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--gool", "--wiw-outer", " ")))
+        assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--wiw-peers", "")))
         // A warp-in-warp hop named without a protocol selects gool; asking for a scan of the hops does not.
         assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--wiw-outer", "162.159.192.1:2408")))
         assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--wiw-peers", "162.159.192.1:2408,188.114.96.1:2408")))
@@ -458,6 +558,25 @@ class AetherCoreManagerTest {
         assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--mim-scan")))
         assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--mim-outer", "162.159.192.1:443", "--wiw-inner", "188.114.96.1:894")))
         assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--masque", "--mim-outer", "162.159.192.1:443")))
+        // A blank masque-in-masque hop sets nothing either, and the core runs MASQUE.
+        assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--mim-outer", "")))
+        assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--mim-peers", " ")))
+        assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--mim-peers", " auto ")))
+        // Each hop setting is the last value given for it, as the variable the core reads: a blank one clears it.
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--gool", "--wiw-outer", "162.159.192.1:2408", "--wiw-outer", "")))
+        assertEquals(AetherProtocol.GOOL, AetherCoreManager.protocolOf(listOf(bin, "--gool", "--wiw-outer", "", "--gool-outer", "162.159.192.1:2408")))
+        assertEquals(AetherProtocol.MASQUE, AetherCoreManager.protocolOf(listOf(bin, "--mim-peers", "162.159.192.1:443,188.114.96.1:443", "--mim-scan")))
+    }
+
+    @Test
+    fun theWordsOfACommandLineFromProcKeepItsEmptyArguments() {
+        assertEquals(listOf("/data/app/lib/libaether.so", "--gool", "--wiw-outer", "", "--bind", "127.0.0.1:10819"), AetherCoreManager.nulSeparated("/data/app/lib/libaether.so\u0000--gool\u0000--wiw-outer\u0000\u0000--bind\u0000127.0.0.1:10819\u0000"))
+        // Read as the core runs: WireGuard over MASQUE, the blank hop setting nothing.
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCoreManager.protocolOf(AetherCoreManager.nulSeparated("aether\u0000--gool\u0000--wiw-outer\u0000\u0000--bind\u0000127.0.0.1:10819\u0000")))
+        assertEquals(listOf("HOME=/x", "PATTNG_AETHER_SESSION=1"), AetherCoreManager.nulSeparated("HOME=/x\u0000PATTNG_AETHER_SESSION=1\u0000"))
+        assertEquals(emptyList<String>(), AetherCoreManager.nulSeparated(""))
+        // A last word without its NUL stays.
+        assertEquals(listOf("aether", "--wg"), AetherCoreManager.nulSeparated("aether\u0000--wg"))
     }
 
     @Test
@@ -558,7 +677,7 @@ class AetherCoreManagerTest {
         val reverse = AetherCoreManager.buildArguments(profile().copy(aetherTor = "reverse"), 10819)
         assertTrue("--tor-reverse" in reverse)
         assertEquals("127.0.0.1:10819", valueAfter(reverse, "--bind"))
-        // Unlike Psiphon's, Tor's listener gets a real port: the core dials the address Tor was told to listen on.
+        // Unlike Psiphon's, Tor's listener gets a real port, which cores before 2.3.5 needed, see buildArguments.
         assertEquals("127.0.0.1:10820", valueAfter(reverse, "--tor-bind"))
         assertEquals(10819, AetherCoreManager.listenerPortOf(reverse))
     }
@@ -691,21 +810,61 @@ class AetherCoreManagerTest {
         assertTrue(AetherCoreManager.masqueOverHttp2(AetherProtocol.MASQUE, AetherTransport.HTTP3, AetherTor.REVERSE, AetherPsiphon.OFF))
         assertFalse(AetherCoreManager.masqueOverHttp2(AetherProtocol.MASQUE, AetherTransport.HTTP3, AetherTor.CHAIN, AetherPsiphon.CHAIN))
         assertFalse(AetherCoreManager.masqueOverHttp2(AetherProtocol.GOOL, AetherTransport.HTTP2, AetherTor.OFF, AetherPsiphon.OFF))
+        assertTrue(AetherCoreManager.masqueOverHttp2(AetherProtocol.WG_OVER_MASQUE, AetherTransport.HTTP2, AetherTor.OFF, AetherPsiphon.OFF))
+        // Tor or Psiphon around WireGuard over MASQUE carry its MASQUE over HTTP/2.
+        assertTrue(AetherCoreManager.masqueOverHttp2(AetherProtocol.WG_OVER_MASQUE, AetherTransport.HTTP3, AetherTor.REVERSE, AetherPsiphon.OFF))
+        val throughTor = AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE).copy(aetherTor = "reverse"), 10819)
+        assertTrue(throughTor.contains("--tor-reverse"))
+        assertEquals("gool", valueAfter(throughTor, "--protocol"))
+        assertNull(valueAfter(throughTor, "--noize"))
+        assertNull(valueAfter(AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE, AetherTransport.HTTP2), 10819), "--noize"))
+        assertEquals("aggressive", valueAfter(AetherCoreManager.buildArguments(profile(AetherProtocol.WG_OVER_MASQUE), 10819), "--noize"))
     }
 
     @Test
     fun theFingerprintShapesEveryMasqueTunnelAndNoOther() {
-        for (protocol in listOf(AetherProtocol.MASQUE, AetherProtocol.MIM)) {
+        for (protocol in listOf(AetherProtocol.MASQUE, AetherProtocol.MIM, AetherProtocol.WG_OVER_MASQUE)) {
             for (transport in AetherTransport.entries) {
                 // Chrome's rule is named, whatever the core's default; BoringSSL orders it by the phone's AES
-                // instructions as it does the TLS 1.3 suites. Chrome sends GREASE.
+                // instructions as it does the TLS 1.3 suites. So are Chrome's groups, the post-quantum one first. Chrome
+                // sends GREASE.
                 val chrome = AetherCoreManager.buildArguments(profile(protocol, transport), 10819)
                 assertEquals("ALL:!aPSK:!ECDSA+SHA1:!3DES", valueAfter(chrome, "--tls-ciphers"))
+                assertEquals("X25519MLKEM768:X25519:P-256:P-384", valueAfter(chrome, "--tls-groups"))
                 assertFalse("--disable-grease" in chrome)
+                // BoringSSL's TLS 1.3 order and key shares are Chrome's.
+                assertFalse("--tls13-ciphers" in chrome)
+                assertFalse("--tls-key-shares" in chrome)
+                // And GREASE among the signature algorithms, which Chrome alone sends.
+                assertTrue("--enable-grease-sigalgs" in chrome)
+                // Chrome 120's: the same rule, groups without a post-quantum one, GREASE but none among the signature
+                // algorithms.
+                val chrome120 = AetherCoreManager.buildArguments(profile(protocol, transport).copy(aetherFingerprint = "chrome-120"), 10819)
+                assertEquals("ALL:!aPSK:!ECDSA+SHA1:!3DES", valueAfter(chrome120, "--tls-ciphers"))
+                assertEquals("X25519:P-256:P-384", valueAfter(chrome120, "--tls-groups"))
+                assertFalse("--disable-grease" in chrome120)
+                assertFalse("--enable-grease-sigalgs" in chrome120)
+                assertFalse("--tls13-ciphers" in chrome120)
+                assertFalse("--tls-key-shares" in chrome120)
                 for (fingerprint in listOf(AetherFingerprint.FIREFOX, AetherFingerprint.SEMI_PYTHON, AetherFingerprint.GO)) {
                     val arguments = AetherCoreManager.buildArguments(profile(protocol, transport).copy(aetherFingerprint = fingerprint.type), 10819)
                     assertEquals(fingerprint.ciphers, valueAfter(arguments, "--tls-ciphers"))
+                    assertEquals(fingerprint.tls13Ciphers, valueAfter(arguments, "--tls13-ciphers"))
+                    assertEquals(fingerprint.groups, valueAfter(arguments, "--tls-groups"))
+                    assertEquals(fingerprint.keyShares, valueAfter(arguments, "--tls-key-shares"))
                     assertTrue("--disable-grease" in arguments)
+                    assertFalse("--enable-grease-sigalgs" in arguments)
+                    // One order of the extensions, as these clients keep.
+                    assertTrue("--disable-extension-permutation" in arguments)
+                }
+                // Every option of every fingerprint goes to the core, in the fingerprint's order: the signature
+                // algorithms, the extensions and the rest.
+                for (fingerprint in AetherFingerprint.entries) {
+                    val arguments = AetherCoreManager.buildArguments(profile(protocol, transport).copy(aetherFingerprint = fingerprint.type), 10819)
+                    assertTrue(
+                        java.util.Collections.indexOfSubList(arguments, fingerprint.arguments) >= 0,
+                        "${fingerprint.type}, $protocol over $transport"
+                    )
                 }
             }
         }
@@ -718,6 +877,16 @@ class AetherCoreManagerTest {
             val arguments = AetherCoreManager.buildArguments(profile(protocol, AetherTransport.HTTP2).copy(aetherFingerprint = "go"), 10819)
             assertFalse("--tls-ciphers" in arguments)
             assertFalse("--disable-grease" in arguments)
+            assertFalse("--tls-groups" in AetherCoreManager.buildArguments(profile(protocol, AetherTransport.HTTP2), 10819))
+            val firefox = AetherCoreManager.buildArguments(profile(protocol, AetherTransport.HTTP2).copy(aetherFingerprint = "firefox"), 10819)
+            assertFalse("--tls13-ciphers" in firefox)
+            assertFalse("--tls-key-shares" in firefox)
+            assertFalse("--enable-grease-sigalgs" in AetherCoreManager.buildArguments(profile(protocol, AetherTransport.HTTP2), 10819))
+            for (fingerprint in AetherFingerprint.entries) {
+                val arguments = AetherCoreManager.buildArguments(profile(protocol, AetherTransport.HTTP2).copy(aetherFingerprint = fingerprint.type), 10819)
+                val flags = fingerprint.arguments.filter { it.startsWith("--") }
+                assertTrue(flags.none { it in arguments }, "${fingerprint.type}, $protocol")
+            }
         }
         // A scan's probes send the ClientHello the tunnel will.
         assertTrue("--disable-grease" in AetherCoreManager.buildArguments(profile().copy(aetherFingerprint = "firefox"), 0, scan = true))
@@ -741,6 +910,7 @@ class AetherCoreManagerTest {
             aetherEch = true,
             aetherEchDns = "--upstream",
             aetherEchDomain = "--bind",
+            aetherMasqueSni = "--upstream",
         )
         val arguments = AetherCoreManager.buildArguments(crafted, 10819)
         assertFalse("--upstream" in arguments, arguments.toString())
@@ -748,6 +918,7 @@ class AetherCoreManagerTest {
         assertNull(valueAfter(arguments, "--exit-loc"))
         assertEquals("udp://1.1.1.1", valueAfter(arguments, "--ech-dns"))
         assertEquals("cloudflare-ech.com", valueAfter(arguments, "--ech-domain"))
+        assertEquals("www.cloudflare.com", valueAfter(arguments, "--masque-sni"))
         assertEquals("127.0.0.1:10819", valueAfter(arguments, "--bind"))
         // The core of the session is still told to dial out through Xray.
         val session = AetherCore.of(crafted, 10819).through(10822)
@@ -774,6 +945,44 @@ class AetherCoreManagerTest {
         val bridged = AetherCoreManager.buildArguments(tor, 10819)
         assertFalse("--upstream" in bridged, bridged.toString())
         assertEquals(listOf("obfs4 192.0.2.1:443 FP cert=x iat-mode=0"), valuesAfter(bridged, "--tor-bridge"))
+    }
+
+    @Test
+    fun theServerNameOfTheMasqueHandshakesReachesTheCoreOverMasqueAlone() {
+        // The default is named as well, so that the command shows what is sent.
+        assertEquals("www.cloudflare.com", valueAfter(AetherCoreManager.buildArguments(profile(), 10819), "--masque-sni"))
+        val blank = profile().copy(aetherMasqueSni = " ")
+        assertEquals("www.cloudflare.com", valueAfter(AetherCoreManager.buildArguments(blank, 10819), "--masque-sni"))
+
+        // A name of the profile's own, trimmed, on either carrier, on every protocol over MASQUE, and in a scan.
+        val named = profile().copy(aetherMasqueSni = " consumer-masque.cloudflareclient.com ")
+        val cases = listOf(
+            named,
+            named.copy(aetherTransport = AetherTransport.HTTP2.type),
+            named.copy(aetherProtocol = AetherProtocol.MIM.type),
+            named.copy(aetherProtocol = AetherProtocol.WG_OVER_MASQUE.type),
+            named.copy(aetherTor = AetherTor.REVERSE.type),
+            named.copy(aetherPsiphon = AetherPsiphon.CHAIN.type),
+        )
+        for (case in cases) {
+            for (scan in listOf(false, true)) {
+                val arguments = AetherCoreManager.buildArguments(case, 10819, scan = scan)
+                assertEquals("consumer-masque.cloudflareclient.com", valueAfter(arguments, "--masque-sni"), arguments.toString())
+                assertEquals(1, arguments.count { it == "--masque-sni" }, arguments.toString())
+            }
+        }
+
+        // WireGuard takes none, nor does a core without a WARP tunnel.
+        val without = listOf(
+            named.copy(aetherProtocol = AetherProtocol.WIREGUARD.type),
+            named.copy(aetherProtocol = AetherProtocol.GOOL.type),
+            named.copy(aetherPsiphon = AetherPsiphon.ONLY.type),
+            named.copy(aetherTor = AetherTor.ONLY.type),
+        )
+        for (case in without) {
+            val arguments = AetherCoreManager.buildArguments(case, 10819)
+            assertFalse("--masque-sni" in arguments, arguments.toString())
+        }
     }
 
     @Test
@@ -845,7 +1054,8 @@ class AetherCoreManagerTest {
         assertEquals(listOf("PSIPHON", "MASQUE"), path("--psiphon-reverse"))
         assertEquals(listOf("MASQUE", "TOR"), path("--tor"))
         assertEquals(listOf("TOR", "MIM"), path("--mim", "--tor-reverse"))
-        assertEquals(listOf("TOR", "GOOL", "PSIPHON"), path("--gool", "--psiphon", "--tor-reverse"))
+        assertEquals(listOf("TOR", "WG_OVER_MASQUE", "PSIPHON"), path("--gool", "--psiphon", "--tor-reverse"))
+        assertEquals(listOf("GOOL", "TOR"), path("--protocol", "gool", "--gool-classic", "--tor"))
         assertEquals(listOf("PSIPHON", "WIREGUARD", "TOR"), path("--wg", "--tor", "--psiphon-reverse"))
         // A carrier alone is the whole tunnel, whatever else is written; Tor alone comes first, as it does for the core.
         assertEquals(listOf("PSIPHON"), path("--wg", "--psiphon-only"))
@@ -856,6 +1066,12 @@ class AetherCoreManagerTest {
         assertEquals(AetherTor.ONLY, AetherCoreManager.torModeOf(listOf("--tor", "--tor-only")))
         assertEquals(AetherPsiphon.CHAIN, AetherCoreManager.psiphonModeOf(listOf("--psiphon-reverse", "--psiphon")))
         assertEquals("--bind", AetherCoreManager.listenerFlagOf(listOf("--psiphon", "--psiphon-only")))
+        // A carrier alone is dialled on the core's own listener, whatever the other is told: the core starts only it.
+        assertEquals("--bind", AetherCoreManager.listenerFlagOf(listOf("--tor-only", "--psiphon")))
+        assertEquals("--bind", AetherCoreManager.listenerFlagOf(listOf("--psiphon-only", "--tor")))
+        assertEquals("TOR", AetherCoreManager.aloneOf(listOf("--tor-only", "--psiphon-only")))
+        assertEquals("PSIPHON", AetherCoreManager.aloneOf(listOf("--psiphon-only", "--tor")))
+        assertNull(AetherCoreManager.aloneOf(listOf("--tor", "--psiphon-reverse")))
     }
 
     @Test
@@ -866,6 +1082,9 @@ class AetherCoreManagerTest {
         assertFalse(AetherCoreManager.readyNeedsWord(listOf("--masque", "--psiphon-reverse")))
         assertFalse(AetherCoreManager.readyNeedsWord(listOf("--wg", "--tor")))
         assertFalse(AetherCoreManager.readyNeedsWord(listOf("--wg")))
+        // Tor alone runs no Psiphon, whatever Psiphon is told; Psiphon alone does say it.
+        assertFalse(AetherCoreManager.readyNeedsWord(listOf("--tor-only", "--psiphon")))
+        assertTrue(AetherCoreManager.readyNeedsWord(listOf("--psiphon-only", "--tor")))
 
         assertTrue(AetherCoreManager.isReadyWord("[2026-09-24T10:00:00.000Z INFO  aether] [+] psiphon is ready; 127.0.0.1:10819 leaves through psiphon, carried by the tunnel"))
         assertTrue(AetherCoreManager.isReadyWord("[2026-09-24T10:00:00.000Z INFO  aether] [+] psiphon is ready; 127.0.0.1:10819 leaves through psiphon"))
@@ -896,6 +1115,62 @@ class AetherCoreManagerTest {
     }
 
     @Test
+    fun theEndOfTorOrPsiphonInsideTheTunnelIsToldFromTheirOtherLines() {
+        val tor = listOf("--masque", "--tor", "--tor-bind", "127.0.0.1:10819", "--bind", "127.0.0.1:10820")
+        val psiphon = listOf("--masque", "--psiphon", "--psiphon-bind", "127.0.0.1:10819", "--bind", "127.0.0.1:10820")
+        // The core's lines as it writes them (aether lib.rs, watch_chain): an error's words start with the label of its
+        // kind, as AetherError::Other shows it.
+        val torEnded = "[2026-10-23T10:00:00.000Z ERROR aether] [-] tor: other: the tor socks5 listener cannot use 127.0.0.1:10819: " +
+            "Address already in use (os error 98); another program already listens there, so stop it or choose another port with --tor-bind"
+        assertEquals(
+            "tor: the tor socks5 listener cannot use 127.0.0.1:10819: Address already in use (os error 98); " +
+                "another program already listens there, so stop it or choose another port with --tor-bind",
+            AetherCoreManager.chainEndWords(torEnded, tor)
+        )
+        assertEquals(
+            "tor: Connection reset by peer (os error 104)",
+            AetherCoreManager.chainEndWords("[2026-10-23T10:00:00.000Z ERROR aether] [-] tor: io: Connection reset by peer (os error 104)", tor)
+        )
+        // As a device logged it on 2026-09-24.
+        assertEquals(
+            "psiphon: psiphon did not come up in time; it may be blocked on this network",
+            AetherCoreManager.chainEndWords(
+                "[2026-09-24T16:12:36.142Z ERROR aether] [-] psiphon: other: psiphon did not come up in time; it may be blocked on this network",
+                psiphon
+            )
+        )
+        assertEquals(
+            "psiphon: psiphon stopped: exit status: 1",
+            AetherCoreManager.chainEndWords("[2026-10-23T10:00:00.000Z ERROR aether] [-] psiphon: other: psiphon stopped: exit status: 1", psiphon)
+        )
+        // The notices of the Psiphon client come from the core's psiphon module, under the same prefix, at any level.
+        assertNull(
+            AetherCoreManager.chainEndWords(
+                "[2026-10-23T10:00:00.000Z ERROR aether::psiphon] [-] psiphon: error initializing local SOCKS proxy: address already in use",
+                psiphon
+            )
+        )
+        assertNull(
+            AetherCoreManager.chainEndWords(
+                "[2026-10-23T10:00:00.000Z ERROR aether::psiphon] [-] psiphon: psiphon.(*Controller).Run#412: tunnel failed",
+                psiphon
+            )
+        )
+        assertNull(AetherCoreManager.chainEndWords("[2026-10-23T10:00:00.000Z WARN  aether::psiphon] [-] psiphon lost its tunnel; it is reconnecting", psiphon))
+        // Not at the error level, Tor's word for a session on Psiphon's listener, a session on the core's own listener,
+        // and the error the core itself stops on, which ends it anyway.
+        assertNull(AetherCoreManager.chainEndWords(torEnded.replace("ERROR", "INFO "), tor))
+        assertNull(AetherCoreManager.chainEndWords(torEnded, psiphon))
+        assertNull(AetherCoreManager.chainEndWords(torEnded, listOf("--masque", "--bind", "127.0.0.1:10819")))
+        assertNull(AetherCoreManager.chainEndWords("Error: Other(\"[-] tor: the tor socks5 listener cannot use 127.0.0.1:10819\")", tor))
+        // Psiphon around the tunnel ends the tunnel with it, and the core's own listener answers no more: no leak to look for.
+        val reverse = listOf("--masque", "--psiphon-reverse", "--bind", "127.0.0.1:10819")
+        assertNull(AetherCoreManager.chainEndWords("[2026-10-23T10:00:00.000Z ERROR aether::psiphon] [-] psiphon: other: psiphon stopped: exit status: 1", reverse))
+
+        assertEquals(R.string.aether_core_stopped_chain_ended, AetherCoreManager.stoppedMessage(noEchKey = false, chainEnded = true))
+    }
+
+    @Test
     fun theGoProgramsAreToldWhereAndroidKeepsItsRootCertificates() {
         assertEquals(
             "/apex/com.android.conscrypt/cacerts:/system/etc/security/cacerts",
@@ -914,7 +1189,7 @@ class AetherCoreManagerTest {
     @Test
     fun thePsiphonDatastoreLivesBesideTheIdentityDirectoryAndMovesOutOfItOnce() {
         assertEquals("AETHER_PSIPHON_DIR", AetherCoreManager.PSIPHON_DIR_ENV)
-        val files = Files.createTempDirectory("matixray-files").toFile()
+        val files = Files.createTempDirectory("pattng-files").toFile()
         val work = File(files, "aether").apply { mkdirs() }
         try {
             // Nothing to move: the directory is named, not made; the core makes it.
@@ -980,7 +1255,7 @@ class AetherCoreManagerTest {
 
     @Test
     fun clearingThePsiphonDataRemovesTheDatastoreWhereverItIs() {
-        val files = Files.createTempDirectory("matixray-files").toFile()
+        val files = Files.createTempDirectory("pattng-files").toFile()
         val work = File(files, "aether").apply { mkdirs() }
         try {
             assertTrue(AetherCoreManager.clearPsiphonState(files, work))
@@ -1185,6 +1460,40 @@ class AetherCoreManagerTest {
     }
 
     @Test
+    fun theExitOfACoreOfItsOwnOpensWithTheOutboundOfItsNode() {
+        val ech = """{"tag": "ech-query", "protocol": "freedom"}"""
+        val node = V2rayConfig.OutboundBean(
+            tag = "proxy",
+            protocol = "vless",
+            streamSettings = V2rayConfig.OutboundBean.StreamSettingsBean(
+                network = "tcp",
+                security = "tls",
+                tlsSettings = V2rayConfig.OutboundBean.StreamSettingsBean.TlsSettingsBean(echConfigList = "AEX+DQ", echOutbound = ech),
+            ),
+        )
+        val opened = JsonParser.parseString(
+            AetherCoreManager.exitConfiguration(AetherExit(node = "germany"), configuration = null, logLevel = "warning") {
+                if (it == "germany") ExitNodeOutbound.Built(node) else ExitNodeOutbound.NotFound
+            }
+        ).asJsonObject
+        val outbounds = opened.getAsJsonArray("outbounds").map { it.asJsonObject }
+        // The node's outbound under the tag of the exit-node, and its ECH outbound linked to it, as in a session.
+        assertEquals(listOf("exit-node", "ech-query"), outbounds.map { it.get("tag").asString })
+        assertEquals("vless", outbounds.first().get("protocol").asString)
+        val tls = outbounds.first().getAsJsonObject("streamSettings").getAsJsonObject("tlsSettings")
+        assertEquals("ech-query", tls.getAsJsonObject("echSockopt").get("dialerProxy").asString)
+        assertEquals("warning", opened.getAsJsonObject("log").get("loglevel").asString)
+
+        // A node that gives no outbound opens no exit: the core would reach the internet without it.
+        for (problem in listOf(ExitNodeOutbound.NotFound, ExitNodeOutbound.SameName, ExitNodeOutbound.NoOutbound)) {
+            assertNull(AetherCoreManager.exitConfiguration(AetherExit(node = "gone"), configuration = null, logLevel = "warning") { problem })
+        }
+        // A configuration under test that has the exit-node, a chain's hop, keeps it, as for any exit.
+        val chained = """{"outbounds": [{"tag": "proxy", "protocol": "socks"}, {"tag": "exit-node", "protocol": "trojan"}]}"""
+        assertEquals(chained, AetherCoreManager.exitConfiguration(AetherExit(node = "gone"), chained, "warning") { ExitNodeOutbound.NotFound })
+    }
+
+    @Test
     fun theKeyOfTheExitNodeIsReadFromTheEnvironmentOfACore() {
         assertEquals("abc", AetherCoreManager.exitKeyOf(listOf("HOME=/x", "${AetherCoreManager.EXIT_ENV}=abc")))
         assertNull(AetherCoreManager.exitKeyOf(listOf("HOME=/x", "${AetherCoreManager.SESSION_ENV}=1")))
@@ -1364,5 +1673,300 @@ class AetherCoreManagerTest {
             listOf("--wg", "--bind", "127.0.0.1:10820", AetherCoreManager.UPSTREAM, "socks5://127.0.0.1:41234"),
             AetherCoreManager.standaloneArguments(exported, 41234)
         )
+    }
+
+    @Test
+    fun theSessionTakesTheListenersOfItsCoreAndTheSecondaryInboundOfItsConfiguration() {
+        // Tor inside the tunnel, dialled on P, and Psiphon around it on a port of its own choosing.
+        val core = AetherCore(
+            listOf(
+                "--masque", "--tor", "--psiphon-reverse",
+                "--bind", "127.0.0.1:10820",
+                AetherCoreManager.TOR_BIND, "127.0.0.1:10819",
+                AetherCoreManager.PSIPHON_BIND, "127.0.0.1:0",
+            )
+        )
+        val routed = """{"inbounds": [{"tag": "socks", "port": 10808}, {"tag": "secondary-socks", "port": 10822, "listen": "127.0.0.1", "protocol": "mixed"}]}"""
+        assertEquals(
+            listOf(
+                AetherCoreManager.SessionPort(10820, secondary = false),
+                AetherCoreManager.SessionPort(10819, secondary = false),
+                AetherCoreManager.SessionPort(10822, secondary = true),
+            ),
+            AetherCoreManager.sessionPorts(core, routed, secondaryPort = 10822)
+        )
+        // A command naming an upstream of its own gets no secondary-socks inbound: what it names has to be listening.
+        val ownUpstream = """{"inbounds": [{"tag": "socks", "port": 10808}]}"""
+        assertEquals(
+            listOf(AetherCoreManager.SessionPort(10820, secondary = false), AetherCoreManager.SessionPort(10819, secondary = false)),
+            AetherCoreManager.sessionPorts(core, ownUpstream, secondaryPort = 10822)
+        )
+    }
+
+    @Test
+    fun aStartWaitsForTheCoresOfTestsOnItsPortsAlone() {
+        val ports = setOf(10819)
+        val onIt = listOf("--wg", "--bind", "127.0.0.1:10819")
+        assertTrue(AetherCoreManager.isProbeOn(onIt, ownerAlive = true, sessionMarked = false, ports = ports))
+        // Tor inside the tunnel listens there in the core's place.
+        val torOnIt = listOf("--masque", "--tor", "--tor-bind", "127.0.0.1:10819", "--bind", "127.0.0.1:10820")
+        assertTrue(AetherCoreManager.isProbeOn(torOnIt, ownerAlive = true, sessionMarked = false, ports = ports))
+        // PattNG: a test's core on another port the session takes, a default both commands leave out among them.
+        val ownLeftOut = listOf("--wg", "--tor", "--tor-bind", "127.0.0.1:20808")
+        assertTrue(AetherCoreManager.isProbeOn(ownLeftOut, ownerAlive = true, sessionMarked = false, ports = setOf(1819, 10819)))
+        assertFalse(AetherCoreManager.isProbeOn(ownLeftOut, ownerAlive = true, sessionMarked = false, ports = ports))
+        // A renewal of keys binds no listener of its own: a start does not wait for it.
+        val renewal = listOf("--register", "wg", "--wg")
+        assertFalse(AetherCoreManager.isProbeOn(renewal, ownerAlive = true, sessionMarked = false, ports = setOf(1819, 10819)))
+        // A core of a test elsewhere, the session's own core, a leftover whose owner is gone, or one that cannot be told apart.
+        val elsewhere = listOf("--wg", "--bind", "127.0.0.1:20808")
+        assertFalse(AetherCoreManager.isProbeOn(elsewhere, ownerAlive = true, sessionMarked = false, ports = ports))
+        assertFalse(AetherCoreManager.isProbeOn(onIt, ownerAlive = true, sessionMarked = true, ports = ports))
+        assertFalse(AetherCoreManager.isProbeOn(onIt, ownerAlive = false, sessionMarked = false, ports = ports))
+        assertFalse(AetherCoreManager.isProbeOn(onIt, ownerAlive = true, sessionMarked = null, ports = ports))
+    }
+
+    @Test
+    fun anAddressTheCoreTakesIsAnIpAddressAndAPort() {
+        listOf(
+            "127.0.0.1:10819", "0.0.0.0:0", "255.255.255.255:65535", "[::1]:10819", "[::]:1", "[fe80::1%2]:10819",
+            "[::ffff:127.0.0.1]:1", "[1:2:3:4:5:6:7:8]:1", "[1:2:3:4:5:6:1.2.3.4]:1", "[1::]:1", "[1:2:3:4:5:6:7::]:1",
+            // Rust reads a port, and a scope, with any number of leading zeros.
+            "127.0.0.1:000080", "127.0.0.1:0000000000000065535", "[::1%0004294967295]:1",
+        ).forEach { assertTrue(AetherCoreManager.isSocketAddress(it), it) }
+        listOf(
+            "localhost:10819", "10819", "127.0.0.1", "127.0.0.1:", "127.0.0.1:65536", "127.0.0.1:-1", "127.0.0.01:1", "1.2.3:1",
+            "256.0.0.1:1", "::1:10819", "[::1]", "[:::1]:1", "[1:2:3:4:5:6:7:8:9]:1", "[1:2:3:4:5:6:7:8::]:1", "[1.2.3.4::]:1",
+            "[1::2::3]:1", "[fe80::1%]:1", "[gggg::1]:1", "[12345::1]:1", " 127.0.0.1:1", "127.0.0.1:1 ",
+            "127.0.0.1:0065536", "127.0.0.1:+80", "[::1%4294967296]:1", "[::1%eth0]:1", "127.0.0.1:۱۰۸۱۹",
+        ).forEach { assertFalse(AetherCoreManager.isSocketAddress(it), it) }
+    }
+
+    @Test
+    fun aListenerAddressIsReadAsTheCoreReadsIt() {
+        // The core's own listener as written, every other trimmed, the one the app dials among them.
+        val argv = listOf("--tor", "--bind", " 127.0.0.1:10820 ", "--tor-bind", " 127.0.0.1:10819 ", "--http-proxy", "127.0.0.1:8118 ")
+        assertEquals(" 127.0.0.1:10820 ", AetherCoreManager.listenerAddressAfter(argv, "--bind"))
+        assertEquals("127.0.0.1:10819", AetherCoreManager.listenerAddressAfter(argv, AetherCoreManager.TOR_BIND))
+        assertEquals("127.0.0.1:10819", AetherCoreManager.listenerAddressOf(argv))
+        assertEquals(10819, AetherCoreManager.listenerPortOf(argv))
+        assertEquals(8118, AetherCoreManager.portAfter(argv, AetherCoreManager.HTTP_PROXY))
+        assertNull(AetherCoreManager.portAfter(argv, "--bind"))
+        assertNull(AetherCoreManager.listenerAddressAfter(argv, AetherCoreManager.PSIPHON_BIND))
+    }
+
+    @Test
+    fun anAddressIsTrimmedByTheWhitespaceOfTheCore() {
+        // Rust's: a next line (U+0085) goes, an information separator (U+001F), which Kotlin's trim() takes, stays.
+        assertEquals("127.0.0.1:10819", AetherCoreManager.listenerAddressAfter(listOf("--tor-bind", "127.0.0.1:10819\u0085"), AetherCoreManager.TOR_BIND))
+        assertEquals("127.0.0.1:10819\u001F", AetherCoreManager.listenerAddressAfter(listOf("--tor-bind", "127.0.0.1:10819\u001F"), AetherCoreManager.TOR_BIND))
+        assertEquals("127.0.0.1:1", AetherCoreManager.listenerAddressAfter(listOf("--http-proxy", "\u3000 127.0.0.1:1\u00A0"), AetherCoreManager.HTTP_PROXY))
+    }
+
+    @Test
+    fun aListenerAnswersTheAppOnLoopbackOrOnEveryAddress() {
+        listOf(
+            "127.0.0.1", "0.0.0.0", "[::]", "[0:0:0:0:0:0:0:0]", "[::0]", "[::ffff:127.0.0.1]", "[::FFFF:7f00:1]",
+            "[0:0:0:0:0:ffff:127.0.0.1]", "[::ffff:0.0.0.0]",
+        ).forEach { assertTrue(AetherCoreManager.reachesLoopback(it), it) }
+        listOf("127.0.0.2", "192.168.1.5", "[::1]", "[::ffff:127.0.0.2]", "[::ffff:10.0.0.1]", "[1::]", "[fe80::1%2]", "[::ffff:0:1]")
+            .forEach { assertFalse(AetherCoreManager.reachesLoopback(it), it) }
+    }
+
+    @Test
+    fun theGroupsOfAnIpv6AddressAreReadAsRustReadsThem() {
+        assertEquals(listOf(0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 1), AetherCoreManager.ipv6Groups("::ffff:127.0.0.1")!!.toList())
+        assertEquals(listOf(1, 2, 0, 0, 0, 0, 0, 8), AetherCoreManager.ipv6Groups("1:2::8")!!.toList())
+        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7, 8), AetherCoreManager.ipv6Groups("1:2:3:4:5:6:7:8")!!.toList())
+        assertNull(AetherCoreManager.ipv6Groups("1::2::3"))
+        assertNull(AetherCoreManager.ipv6Groups("fe80::1%2"))
+    }
+
+    @Test
+    fun aStartRefusesACommandTheCoreCannotRunAsTheEditorDoesAndInItsOrder() {
+        fun refusal(command: String, content: String = "{}") = AetherCoreManager.refusalOf(AetherCore.ofCommand(command)!!, content)
+        val inbound = """{"inbounds": [{"protocol": "socks", "port": 20808}]}"""
+        // A number that is no port first, then an address the core does not take, one the app does not reach, a port
+        // two listeners share, and a port an inbound of the configuration listens on.
+        assertEquals(R.string.aether_listen_port_invalid to 70000, refusal("aether --wg --bind localhost:70000", inbound)?.let { it.message to it.argument })
+        assertEquals(
+            R.string.aether_listen_address_invalid to "--bind",
+            refusal("aether --wg --bind localhost:20808 --http-proxy 127.0.0.1:20808", inbound)?.let { it.message to it.argument },
+        )
+        assertEquals(
+            R.string.aether_listen_address_unreachable to "--bind",
+            refusal("aether --wg --bind [::1]:20808 --http-proxy 127.0.0.1:20808", inbound)?.let { it.message to it.argument },
+        )
+        assertEquals(
+            R.string.aether_listen_port_shared to 20808,
+            refusal("aether --wg --bind 127.0.0.1:20808 --http-proxy 127.0.0.1:20808", inbound)?.let { it.message to it.argument },
+        )
+        assertEquals(R.string.aether_listen_port_taken to 20808, refusal("aether --wg --bind 127.0.0.1:20808", inbound)?.let { it.message to it.argument })
+        // The log names the port or the option, never the address written.
+        assertEquals("the Aether command gives --bind an address the app does not dial", refusal("aether --wg --bind [::1]:20808")?.reason)
+        assertNull(refusal("aether --wg --bind 127.0.0.1:20808"))
+        assertNull(refusal("aether --wg --bind [::]:20808", inbound.replace("20808", "20809")))
+    }
+
+    @Test
+    fun aNumberACommandNamesThatIsNoPortIsFoundBeforeThePortsAreChecked() {
+        val core = AetherCore.ofCommand(
+            "aether --wg --tor --bind 127.0.0.1:10819 --tor-bind 127.0.0.1:10820 --http-proxy 127.0.0.1:70000 --tor-http 127.0.0.1:-1"
+        )!!
+        assertEquals(listOf(10819, 10820, 70000, -1), core.ports)
+        assertEquals(70000, AetherCoreManager.invalidPort(core))
+        assertEquals(
+            -1,
+            AetherCoreManager.invalidPort(AetherCore.ofCommand("aether --wg --tor --bind 127.0.0.1:10819 --tor-bind 127.0.0.1:10820 --tor-http 127.0.0.1:-1")!!)
+        )
+        assertNull(AetherCoreManager.invalidPort(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:1 --http-proxy 127.0.0.1:65535")!!))
+        // The listener the app dials cannot take 0, any port; another listener can.
+        assertEquals(0, AetherCoreManager.invalidPort(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:0")!!))
+        assertEquals(0, AetherCoreManager.invalidPort(AetherCore.ofCommand("aether --masque --tor --tor-bind 127.0.0.1:0 --bind 127.0.0.1:10820")!!))
+        assertNull(
+            AetherCoreManager.invalidPort(AetherCore.ofCommand("aether --masque --psiphon-reverse --psiphon-bind 127.0.0.1:0 --bind 127.0.0.1:10819")!!)
+        )
+    }
+
+    @Test
+    fun aPortSomethingListensOnIsTakenAndAFreeOneIsNot() {
+        val listener = ServerSocket(0, 50, InetAddress.getByName(AppConfig.LOOPBACK))
+        val port = AetherCoreManager.SessionPort(listener.localPort, secondary = false)
+        listener.use {
+            assertFalse(AetherCoreManager.isFree(port))
+        }
+        assertTrue(AetherCoreManager.isFree(port))
+    }
+
+    @Test
+    fun theSecondaryInboundNeedsItsUdpPortFreeAsWell() {
+        udpWithFreeTcpTwin().use { udp ->
+            // Xray's mixed inbound opens UDP on its port too; the listeners of the core take TCP alone.
+            assertFalse(AetherCoreManager.isFree(AetherCoreManager.SessionPort(udp.localPort, secondary = true)))
+            assertTrue(AetherCoreManager.isFree(AetherCoreManager.SessionPort(udp.localPort, secondary = false)))
+        }
+    }
+
+    /**
+     * A UDP socket on the loopback address whose port number is free over TCP. Another TCP socket of the machine,
+     * a client's among them, may hold the same number now and then, so a few are tried.
+     */
+    private fun udpWithFreeTcpTwin(): DatagramSocket {
+        val loopback = InetAddress.getByName(AppConfig.LOOPBACK)
+        repeat(20) {
+            val udp = DatagramSocket(0, loopback)
+            val tcpFree = try {
+                ServerSocket().use { tcp ->
+                    tcp.reuseAddress = true
+                    tcp.bind(InetSocketAddress(loopback, udp.localPort))
+                }
+                true
+            } catch (_: IOException) {
+                false
+            }
+            if (tcpFree) return udp
+            udp.close()
+        }
+        error("no loopback UDP port whose number is free over TCP")
+    }
+
+    @Test
+    fun theFirstTakenPortInTheOrderOfTheSessionIsReported() {
+        val ports = listOf(
+            AetherCoreManager.SessionPort(10819, secondary = false),
+            AetherCoreManager.SessionPort(10820, secondary = false),
+            AetherCoreManager.SessionPort(10822, secondary = true),
+        )
+        val looked = mutableListOf<Int>()
+        assertEquals(ports[1], AetherCoreManager.firstTaken(ports) { looked += it.port; it.port != 10820 })
+        assertEquals(listOf(10819, 10820), looked)
+        assertNull(AetherCoreManager.firstTaken(ports) { true })
+    }
+
+    @Test
+    fun aTakenPortIsNamedAsTheCoresOrAsTheSecondaryInbound() {
+        assertEquals(
+            R.string.aether_listen_port_in_use,
+            AetherCoreManager.takenMessage(AetherCoreManager.PortCheck.Taken(10819, secondary = false))
+        )
+        assertEquals(
+            R.string.aether_secondary_port_in_use,
+            AetherCoreManager.takenMessage(AetherCoreManager.PortCheck.Taken(10822, secondary = true))
+        )
+    }
+
+    @Test
+    fun theCheckRunsAfterWhatTheExecutorWasGivenBeforeIt() {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val order = Collections.synchronizedList(mutableListOf<String>())
+            executor.execute {
+                Thread.sleep(100)
+                order += "stop of the previous core"
+            }
+            assertEquals("free", AetherCoreManager.awaitOn(executor, timeoutMs = 2_000) { order += "check"; "free" })
+            assertEquals(listOf("stop of the previous core", "check"), order)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun aCheckThatHasNotBegunInTimeGivesNothingAndNeverRuns() {
+        val executor = Executors.newSingleThreadExecutor()
+        val busy = CountDownLatch(1)
+        val ran = AtomicBoolean(false)
+        try {
+            executor.execute { busy.await() }
+            assertNull(AetherCoreManager.awaitOn(executor, timeoutMs = 100) { ran.set(true); "late" })
+            busy.countDown()
+            // The executor goes on with what comes next; the check, not begun in time, is skipped.
+            assertEquals("next", AetherCoreManager.awaitOn(executor, timeoutMs = 2_000) { "next" })
+            assertFalse(ran.get())
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun aCheckThatHasBegunButNotEndedInTimeGivesNothingAndIsInterrupted() {
+        val begun = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val interrupted = CountDownLatch(1)
+        val ranOn = AtomicBoolean(false)
+        // Runs the check on a thread of its own and comes back once the check has begun.
+        val executor = Executor { command ->
+            thread(isDaemon = true) { command.run() }
+            begun.await()
+        }
+        try {
+            val result = AetherCoreManager.awaitOn(executor, timeoutMs = 100) {
+                begun.countDown()
+                try {
+                    release.await()
+                } catch (e: InterruptedException) {
+                    interrupted.countDown()
+                    throw e
+                }
+                ranOn.set(true)
+                "late"
+            }
+            assertNull(result)
+            // No one waits for it any more: its wait ends it, and what would follow the wait is left undone.
+            assertTrue(interrupted.await(2, TimeUnit.SECONDS))
+            assertFalse(ranOn.get())
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test
+    fun aCheckThatFailsGivesNothing() {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            assertNull(AetherCoreManager.awaitOn<String>(executor, timeoutMs = 2_000) { throw IllegalStateException("broken") })
+        } finally {
+            executor.shutdownNow()
+        }
     }
 }

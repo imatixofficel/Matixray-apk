@@ -1,5 +1,6 @@
 package com.v2ray.ang.core
 
+import com.v2ray.ang.dto.ByName
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.enums.AetherProtocol
 import com.v2ray.ang.enums.AetherPsiphon
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.security.MessageDigest
 
 class AetherCoreTest {
 
@@ -76,6 +78,84 @@ class AetherCoreTest {
         val mim = AetherCore.of(profile { aetherProtocol = AetherProtocol.MIM.type; aetherWiwInner = "188.114.96.1:443" })
         assertEquals(mim, AetherCore.ofCommand(mim.command))
         assertEquals(AetherProtocol.MIM, AetherCore.ofCommand(mim.command)!!.protocol)
+
+        val goolOverMasque = AetherCore.of(profile { aetherProtocol = AetherProtocol.WG_OVER_MASQUE.type; aetherWiwInner = "162.159.192.1:2408" })
+        assertEquals(goolOverMasque, AetherCore.ofCommand(goolOverMasque.command))
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, AetherCore.ofCommand(goolOverMasque.command)!!.protocol)
+    }
+
+    @Test
+    fun aProfileNamedAsTheExitNodeTakesThePlaceOfFreedom() {
+        val masked = profile { finalMask = """{"tcp": []}"""; dialMode = "code-1" }
+        assertEquals(AetherExit("""{"tcp": []}""", "code-1"), AetherExit.of(masked))
+        // With a node, the finalMask and the dialMode are out of use.
+        val noded = masked.copy(aetherExitNode = " germany ")
+        assertEquals(AetherExit(node = "germany"), AetherExit.of(noded))
+        assertEquals(AetherExit(node = "germany"), AetherCore.of(noded).exit)
+        assertEquals(AetherCore.of(masked).arguments, AetherCore.of(noded).arguments)
+        assertEquals(AetherExit.of(masked), AetherExit.of(masked.copy(aetherExitNode = " ")))
+        // The node tells exits apart.
+        assertNotEquals(AetherExit.PLAIN.key, AetherExit(node = "germany").key)
+        assertNotEquals(AetherExit(node = "germany").key, AetherExit(node = "france").key)
+        // The key of an exit without one is what it was before nodes.
+        fun digest(text: String) =
+            MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        assertEquals(digest("\u0000code-1\u0000"), AetherExit(dialMode = "code-1").key)
+        assertEquals(digest("\u0000\u0000hops"), AetherExit(hops = "hops").key)
+    }
+
+    @Test
+    fun theKeyOfAnExitNodeTellsAChangedProfileOfTheSameName() {
+        val germany = ProfileItem.create(EConfigType.VLESS).apply { remarks = "germany"; server = "203.0.113.7"; serverPort = "443" }
+        // A subscription's update gives the profile of the name another server, and a new guid the content does not hold.
+        val updated = germany.copy(server = "203.0.113.8")
+        val node = AetherExit(node = "germany")
+        fun found(profile: ProfileItem) = { name: String -> if (name == "germany") ByName.One(profile) else ByName.None }
+
+        val atStart = node.withNodeContent(found(germany))
+        assertEquals(AetherExit.contentOf(germany), atStart.nodeContent)
+        assertEquals(atStart.key, node.withNodeContent(found(germany.copy())).key)
+        assertNotEquals(atStart.key, node.withNodeContent(found(updated)).key)
+        assertNotEquals(atStart.key, node.key)
+        // A name no profile, or several, have any more gives none, and the key without it differs as well.
+        assertEquals(node, node.withNodeContent { ByName.None })
+        assertEquals(node, node.withNodeContent { ByName.Several })
+        // Without a node there is nothing to look up, and the key stays what it was.
+        assertEquals(AetherExit.PLAIN, AetherExit.PLAIN.withNodeContent { error("no node to look up") })
+        // The digest holds no secret of the profile.
+        assertFalse(atStart.key.contains("203.0.113.7"))
+        assertFalse(atStart.nodeContent!!.contains("203.0.113.7"))
+    }
+
+    @Test
+    fun anyProfileAChainTakesForAHopCanBeTheExitNodeButAnAetherOne() {
+        for (type in listOf(EConfigType.VMESS, EConfigType.VLESS, EConfigType.TROJAN, EConfigType.SHADOWSOCKS, EConfigType.SOCKS, EConfigType.HTTP, EConfigType.WIREGUARD, EConfigType.HYSTERIA2)) {
+            assertTrue(AetherExit.takesAsNode(ProfileItem.create(type)), type.name)
+        }
+        for (type in listOf(EConfigType.AETHER, EConfigType.CUSTOM, EConfigType.POLICYGROUP, EConfigType.PROXYCHAIN)) {
+            assertFalse(AetherExit.takesAsNode(ProfileItem.create(type)), type.name)
+        }
+    }
+
+    @Test
+    fun theNamesOfTheProfilesThatCanBeTheExitNodeAreListedOnceWithHowManyHaveThem() {
+        fun named(type: EConfigType, name: String) = ProfileItem.create(type).apply { remarks = name }
+        val profiles = sequenceOf(
+            named(EConfigType.VLESS, " germany "),
+            named(EConfigType.TROJAN, "france"),
+            named(EConfigType.VMESS, "germany"),
+            // An Aether profile, or a group, has a name no exit-node is found by.
+            named(EConfigType.AETHER, "france"),
+            named(EConfigType.POLICYGROUP, "spain"),
+            // Nothing names a profile without a name.
+            named(EConfigType.SOCKS, "  "),
+            named(EConfigType.HTTP, "italy"),
+        )
+        assertEquals(
+            listOf(AetherExitNode("germany", 2), AetherExitNode("france", 1), AetherExitNode("italy", 1)),
+            AetherExit.nodesOf(profiles),
+        )
+        assertEquals(emptyList<AetherExitNode>(), AetherExit.nodesOf(emptySequence()))
     }
 
     @Test
@@ -84,7 +164,9 @@ class AetherCoreTest {
         val core = AetherCore.ofCommand("aether --gool --scan balanced --bind 127.0.0.1:20808 --dns 1.1.1.1")!!
         assertEquals(listOf("--gool", "--scan", "balanced", "--bind", "127.0.0.1:20808", "--dns", "1.1.1.1"), core.arguments)
         assertEquals(20808, core.port)
-        assertEquals(AetherProtocol.GOOL, core.protocol)
+        // Gool is WireGuard over MASQUE to the core, unless something makes it the classic gool.
+        assertEquals(AetherProtocol.WG_OVER_MASQUE, core.protocol)
+        assertEquals(AetherProtocol.GOOL, AetherCore.ofCommand("aether --gool --gool-classic --bind 127.0.0.1:20808")!!.protocol)
     }
 
     @Test
@@ -216,7 +298,8 @@ class AetherCoreTest {
         assertEquals(listOf("WIREGUARD", "PSIPHON"), AetherCore.of(pinned.copy(aetherPsiphon = "chain")).path)
         assertEquals(listOf("PSIPHON"), AetherCore.of(pinned.copy(aetherPsiphon = "only")).path)
         assertEquals(listOf("TOR", "MASQUE"), AetherCore.of(pinned.copy(aetherProtocol = "masque", aetherTor = "reverse")).path)
-        assertEquals(listOf("GOOL", "TOR"), AetherCore.ofCommand("aether --gool --tor")!!.path)
+        assertEquals(listOf("WG_OVER_MASQUE", "TOR"), AetherCore.ofCommand("aether --gool --tor")!!.path)
+        assertEquals(listOf("GOOL", "TOR"), AetherCore.ofCommand("aether --gool-classic --tor")!!.path)
     }
 
     @Test
@@ -260,6 +343,186 @@ class AetherCoreTest {
             assertEquals(20811, AetherCoreManager.secondarySocksPort)
             assertEquals(listOf(20808, 20809, 20810), AetherCore.of(most).ports.sorted())
         }
+    }
+
+    @Test
+    fun theHttpProxiesACommandWrittenByHandOpensAreItsPortsToo() {
+        val tor = AetherCore.ofCommand(
+            "aether --wg --tor --bind 127.0.0.1:10819 --tor-bind 127.0.0.1:10820 " +
+                "--http-proxy 127.0.0.1:8118 --tor-http 127.0.0.1:8119"
+        )!!
+        assertEquals(listOf(10819, 10820, 8118, 8119), tor.ports)
+        val psiphon = AetherCore.ofCommand(
+            "aether --wg --psiphon --bind 127.0.0.1:10819 --psiphon-bind 127.0.0.1:10821 --psiphon-http 127.0.0.1:8120"
+        )!!
+        assertEquals(listOf(10819, 10821, 8120), psiphon.ports)
+    }
+
+    @Test
+    fun twoListenersOfACommandOnOnePortAreFound() {
+        // An HTTP proxy on the port the core listens on, which a command naming no listener gets there.
+        assertEquals(10819, AetherCore.ofCommand("aether --wg --http-proxy 127.0.0.1:10819", 10819)!!.sharedPort)
+        // Tor inside the tunnel on the core's own port.
+        assertEquals(10820, AetherCore.ofCommand("aether --masque --tor --tor-bind 127.0.0.1:10820 --bind 127.0.0.1:10820")!!.sharedPort)
+        // A carrier alone serves the core's own listener and its own HTTP proxy, and the core runs nothing else.
+        val torAlone = AetherCore.ofCommand(
+            "aether --tor-only --bind 127.0.0.1:10819 --http-proxy 127.0.0.1:8118 --tor-http 127.0.0.1:8118 " +
+                "--psiphon --psiphon-bind 127.0.0.1:10819 --psiphon-http 127.0.0.1:8120"
+        )!!
+        assertNull(torAlone.sharedPort)
+        assertEquals(listOf(10819, 8118), torAlone.ports)
+        // Tor's listener of a command that runs no Tor binds nothing: the command names one listener, not two.
+        val torOff = AetherCore.ofCommand("aether --masque --tor-bind 127.0.0.1:10819 --tor-http 127.0.0.1:10820", 10819)!!
+        assertNull(torOff.sharedPort)
+        assertEquals(listOf(10819), torOff.ports)
+        // Each with a port of its own; Psiphon's 0 around the tunnel is none.
+        assertNull(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819 --http-proxy 127.0.0.1:8118")!!.sharedPort)
+        assertNull(
+            AetherCore.ofCommand("aether --masque --psiphon-reverse --psiphon-bind 127.0.0.1:0 --psiphon-http 127.0.0.1:0 --bind 127.0.0.1:10819")!!
+                .sharedPort
+        )
+        // The settings give each listener a port of its own.
+        val most = profile {
+            aetherProtocol = AetherProtocol.MASQUE.type
+            aetherPsiphon = AetherPsiphon.CHAIN.type
+            aetherTor = AetherTor.REVERSE.type
+        }
+        assertNull(AetherCore.of(most).sharedPort)
+    }
+
+    @Test
+    fun aListenerACommandDoesNotNameListensOnTheCoresDefaultPort() {
+        // Tor inside the tunnel gets the app's port; the core's own listener, left out, is on 1819 all the same.
+        assertEquals(listOf(1819, 10819), AetherCore.ofCommand("aether --wg --tor")!!.ports)
+        // Tor's and Psiphon's listeners around the tunnel, left out, are on 1820 and 1821.
+        assertEquals(listOf(10819, 1820), AetherCore.ofCommand("aether --masque --tor-reverse --bind 127.0.0.1:10819")!!.ports)
+        assertEquals(listOf(10819, 1821), AetherCore.ofCommand("aether --masque --psiphon-reverse --bind 127.0.0.1:10819")!!.ports)
+        // A default the command does not see can be the port it names for another listener.
+        assertEquals(1819, AetherCore.ofCommand("aether --wg --tor --tor-bind 127.0.0.1:1819")!!.sharedPort)
+        assertEquals(1820, AetherCore.ofCommand("aether --masque --tor-reverse --bind 127.0.0.1:1820")!!.sharedPort)
+        // An HTTP proxy left out is off, and a listener of a mode that does not run binds nothing.
+        assertEquals(listOf(10819), AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819")!!.ports)
+        // The commands of the app name every listener they run.
+        assertEquals(listOf(10820, 10819), AetherCore.of(pinned.copy(aetherTor = "chain")).ports)
+    }
+
+    @Test
+    fun aloneTheCoreHoldsItsOwnHttpProxyAsItStartsAndThenTheCarriersOne() {
+        // The core binds its own HTTP proxy as it starts, beside its own listener: it counts, and cannot share that one.
+        assertEquals(listOf(10819, 8118), AetherCore.ofCommand("aether --tor-only --bind 127.0.0.1:10819 --http-proxy 127.0.0.1:8118")!!.ports)
+        assertEquals(10819, AetherCore.ofCommand("aether --tor-only --bind 127.0.0.1:10819 --http-proxy 127.0.0.1:10819")!!.sharedPort)
+        // It lets it go before Tor's HTTP proxy is bound, so those two may share a port; Tor's and the core's own listener may not.
+        assertNull(
+            AetherCore.ofCommand("aether --tor-only --bind 127.0.0.1:10819 --http-proxy 127.0.0.1:8118 --tor-http 127.0.0.1:8118")!!.sharedPort
+        )
+        assertEquals(10819, AetherCore.ofCommand("aether --psiphon-only --bind 127.0.0.1:10819 --psiphon-http 127.0.0.1:10819")!!.sharedPort)
+    }
+
+    @Test
+    fun aListenerWhoseAddressTheCoreDoesNotTakeIsFound() {
+        assertNull(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819 --http-proxy [::1]:8118")!!.invalidListener)
+        // The core would quietly listen on its default instead, where the app would dial 20808.
+        assertEquals("--bind", AetherCore.ofCommand("aether --wg --bind localhost:20808")!!.invalidListener)
+        assertEquals(AetherCoreManager.TOR_BIND, AetherCore.ofCommand("aether --masque --tor-reverse --bind 127.0.0.1:10819 --tor-bind 1830")!!.invalidListener)
+        // The core reads its own listener's address as written, and the others trimmed.
+        assertEquals("--bind", AetherCore.ofCommand("aether --wg --bind ' 127.0.0.1:10819'")!!.invalidListener)
+        assertNull(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819 --http-proxy ' 127.0.0.1:8118 '")!!.invalidListener)
+        // An HTTP proxy written blank or "off" is off, and a listener of a mode that does not run binds nothing.
+        assertNull(AetherCore.ofCommand("aether --wg --tor --bind 127.0.0.1:10820 --tor-bind 127.0.0.1:10819 --tor-http off")!!.invalidListener)
+        assertNull(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819 --http-proxy ''")!!.invalidListener)
+        assertNull(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819 --tor-bind nowhere")!!.invalidListener)
+        // The app's own commands write addresses the core takes.
+        assertNull(AetherCore.of(pinned.copy(aetherTor = "chain")).invalidListener)
+    }
+
+    @Test
+    fun theListenerTheAppDialsIsWhereTheAppReachesIt() {
+        // The app dials the core on 127.0.0.1, which a listener on 0.0.0.0 answers as well.
+        assertNull(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819")!!.unreachableListener)
+        assertNull(AetherCore.ofCommand("aether --wg --bind 0.0.0.0:10819")!!.unreachableListener)
+        // :: as well: Android opens an IPv6 socket to IPv4 too.
+        assertNull(AetherCore.ofCommand("aether --wg --bind [::]:10819")!!.unreachableListener)
+        assertNull(AetherCore.ofCommand("aether --wg --bind [::ffff:127.0.0.1]:10819")!!.unreachableListener)
+        // Another loopback address, IPv6's, or a network's: the session would stay connecting.
+        assertEquals("--bind", AetherCore.ofCommand("aether --wg --bind 127.0.0.2:10819")!!.unreachableListener)
+        assertEquals("--bind", AetherCore.ofCommand("aether --wg --bind [::1]:10819")!!.unreachableListener)
+        assertEquals("--bind", AetherCore.ofCommand("aether --wg --bind 192.168.1.5:10819")!!.unreachableListener)
+        // With Tor or Psiphon inside the tunnel the app dials theirs, and the core's own may listen anywhere.
+        assertNull(AetherCore.ofCommand("aether --wg --tor --bind 192.168.1.5:10820 --tor-bind 127.0.0.1:10819")!!.unreachableListener)
+        assertEquals(AetherCoreManager.TOR_BIND, AetherCore.ofCommand("aether --wg --tor --tor-bind [::1]:10819")!!.unreachableListener)
+        assertEquals(
+            AetherCoreManager.PSIPHON_BIND,
+            AetherCore.ofCommand("aether --wg --psiphon --psiphon-bind 10.0.0.1:10819")!!.unreachableListener,
+        )
+        // An HTTP proxy may listen on a network's address; nobody in the app dials it.
+        assertNull(AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819 --http-proxy 192.168.1.5:8118")!!.unreachableListener)
+        // An address the core does not take is another problem, and one the command leaves out the app gives on 127.0.0.1.
+        assertNull(AetherCore.ofCommand("aether --wg --bind localhost:20808")!!.unreachableListener)
+        assertNull(AetherCore.ofCommand("aether --wg --http-proxy 192.168.1.5:8118")!!.unreachableListener)
+        assertNull(AetherCore.of(pinned.copy(aetherTor = "chain")).unreachableListener)
+    }
+
+    @Test
+    fun theListenerTheAppDialsIsReadTrimmedAsTheCoreReadsIt() {
+        // Tor inside the tunnel, dialled on its listener, which the core reads trimmed: the app dials the same port.
+        val tor = AetherCore.ofCommand("aether --masque --tor --tor-bind '127.0.0.1:10820 '")!!
+        assertEquals(10820, tor.port)
+        assertEquals(listOf(1819, 10820), tor.ports)
+        assertNull(tor.invalidListener)
+        assertNull(tor.unreachableListener)
+        // The core's own listener is read as written, so a space keeps the app from reading its port at all.
+        assertNull(AetherCore.ofCommand("aether --wg --bind '127.0.0.1:10819 '"))
+    }
+
+    @Test
+    fun theListenersOtherThanItsOwnAreCountedTrimmedAsTheCoreReadsThem() {
+        assertEquals(
+            listOf(10819, 8118),
+            AetherCore.ofCommand("aether --wg --bind 127.0.0.1:10819 --http-proxy '127.0.0.1:8118 '")!!.ports
+        )
+        assertEquals(
+            8118,
+            AetherCore.ofCommand("aether --wg --bind 127.0.0.1:8118 --http-proxy '127.0.0.1:8118 '")!!.sharedPort
+        )
+    }
+
+    @Test
+    fun aRegistrationOfKeysListensOnlyWhereACarrierAroundTheTunnelDoes() {
+        // The core registers and ends: no listener of its own, though the command names none to leave to a default.
+        assertEquals(emptyList<Int>(), AetherCore(listOf("--register", "wg", "--wg")).ports)
+        assertEquals(emptyList<Int>(), AetherCore(listOf("--register", "wg", "--wg", "--tor")).ports)
+        // A carrier around the tunnel carries its requests on its listener, the default where none is named.
+        assertEquals(listOf(1820), AetherCore(listOf("--register", "masque", "--masque", "--tor-reverse")).ports)
+        assertEquals(
+            listOf(20808),
+            AetherCore(listOf("--register", "masque", "--masque", "--psiphon-reverse", "--psiphon-bind", "127.0.0.1:20808")).ports
+        )
+        // That carrier's HTTP proxy too, which it binds as it serves; the core's own is not bound.
+        assertEquals(
+            listOf(1820, 9000),
+            AetherCore(listOf("--register", "masque", "--masque", "--tor-reverse", "--tor-http", "127.0.0.1:9000", "--http-proxy", "127.0.0.1:9001")).ports
+        )
+        assertEquals(
+            9000,
+            AetherCore(listOf("--register", "masque", "--masque", "--tor-reverse", "--tor-bind", "127.0.0.1:9000", "--tor-http", "127.0.0.1:9000")).sharedPort
+        )
+        assertEquals(
+            listOf(1821, 9002),
+            AetherCore(listOf("--register", "masque", "--masque", "--psiphon-reverse", "--psiphon-http", "127.0.0.1:9002")).ports
+        )
+    }
+
+    @Test
+    fun anUpdateThatLeavesAProfileAsItWasLeavesItsDigestAsItWas() {
+        // A subscription's update builds every profile again, added anew, and may move it to another subscription or
+        // describe it anew; what it connects with is what tells an exit-node, or the hops of a chain, apart.
+        val germany = ProfileItem.create(EConfigType.VLESS).apply { remarks = "germany"; server = "203.0.113.7"; serverPort = "443"; password = "uuid" }
+        val renewed = germany.copy(addedTime = germany.addedTime + 60_000, subscriptionId = "sub", description = "renewed", configVersion = 5)
+
+        assertEquals(AetherExit.contentOf(germany), AetherExit.contentOf(renewed))
+        assertEquals(AetherExit.through(listOf(germany)), AetherExit.through(listOf(renewed)))
+        assertNotEquals(AetherExit.contentOf(germany), AetherExit.contentOf(germany.copy(serverPort = "8443")))
+        assertNotEquals(AetherExit.through(listOf(germany)), AetherExit.through(listOf(germany.copy(password = "another"))))
     }
 
     @Test
@@ -307,5 +570,18 @@ class AetherCoreTest {
         assertEquals(AetherExit.PLAIN, AetherCore.ofCommand(core.command)!!.exit)
         // Dialling out through Xray keeps its exit-node.
         assertEquals(core.exit, core.through(41236).exit)
+    }
+
+    @Test
+    fun aCommandNamingNoListenerGetsOneOnTheListenPortGiven() {
+        onListenPort(10819) {
+            assertEquals(20808, AetherCore.ofCommand("aether --wg", 20808)!!.port)
+            assertEquals(20808, AetherCore.of(profile { aetherCommand = "aether --wg" }, 20808).port)
+            // Without one, on the port of the settings, as before.
+            assertEquals(10819, AetherCore.ofCommand("aether --wg")!!.port)
+            assertEquals(10819, AetherCore.of(profile { aetherCommand = "aether --wg" }).port)
+            // A listener the command names stays.
+            assertEquals(30808, AetherCore.of(profile { aetherCommand = "aether --wg --bind 127.0.0.1:30808" }, 20808).port)
+        }
     }
 }

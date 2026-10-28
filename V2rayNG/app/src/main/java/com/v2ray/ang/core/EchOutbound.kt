@@ -11,7 +11,7 @@ import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.util.JsonUtil
 
 /**
- * the ECH outbound of a profile is a whole Xray outbound, written as raw JSON, that the ECH
+ * PattNG: the ECH outbound of a profile is a whole Xray outbound, written as raw JSON, that the ECH
  * config query is sent through (tlsSettings.echSockopt.dialerProxy). It is appended to the generated
  * configuration after every other outbound, exactly as written.
  */
@@ -87,6 +87,17 @@ object EchOutbound {
             outbounds.add(echOutbound)
         }
         return Result.Done(JsonUtil.toJsonPretty(json).orEmpty())
+    }
+
+    /**
+     * PattNG: whether [outbound] can go into a configuration whose outbounds are tagged [tags], as far as its ECH
+     * outbound tells: none, or one [serialize] takes there, valid and with a tag none of them has.
+     */
+    fun takes(outbound: OutboundBean, tags: Set<String>): Boolean {
+        val tlsSettings = outbound.streamSettings?.tlsSettings ?: return true
+        val text = tlsSettings.echOutbound ?: return true
+        if (validate(text, tlsSettings.echConfigList) != null) return false
+        return parse(text)?.let(::tagOf) !in tags
     }
 
     private fun validate(echOutbound: String?, echConfigList: String?): Error? {

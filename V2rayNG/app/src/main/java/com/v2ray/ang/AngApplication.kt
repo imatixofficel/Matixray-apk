@@ -46,7 +46,7 @@ class AngApplication : Application() {
         // Ensure critical preference defaults are present in MMKV early
         SettingsManager.initApp(this)
 
-        // the Aether cores of this process listen on the port of the settings.
+        // PattNG: the Aether cores of this process listen on the port of the settings.
         AetherCoreManager.listenPortSource = SettingsManager::getAetherListenPort
 
         // Initialize theme state from MMKV

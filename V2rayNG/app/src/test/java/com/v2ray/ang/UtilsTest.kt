@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.net.URI
 
 /**
  * Example local unit test, which will execute on the development machine (host).
@@ -16,6 +17,21 @@ class UtilsTest {
     @Test
     fun test_parseInt() {
         assertEquals(Utils.parseInt("1234"), 1234)
+    }
+
+    @Test
+    fun theDefaultRemoteDnsIsGooglesDnsOverHttpsByAddress() {
+        assertEquals("https://8.8.8.8/dns-query", AppConfig.DNS_PROXY)
+        // Taken by the Remote DNS setting's filter, see SettingsManager.getRemoteDnsServers, and reached without a
+        // name to look up first.
+        assertTrue(Utils.isCoreDNSAddress(AppConfig.DNS_PROXY))
+        assertTrue(Utils.isPureIpAddress(URI(AppConfig.DNS_PROXY).host))
+    }
+
+    @Test
+    fun ipv6IsOnByDefault() {
+        // PattNG: "Enable IPv6" reads as this while no value is stored.
+        assertTrue(AppConfig.DEFAULT_IPV6_ENABLED)
     }
 
     @Test
