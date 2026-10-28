@@ -7,7 +7,6 @@ import com.v2ray.ang.enums.AetherProtocol
 import com.v2ray.ang.enums.AetherPsiphon
 import com.v2ray.ang.enums.AetherTor
 import com.v2ray.ang.util.LogUtil
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
@@ -45,15 +44,8 @@ object AetherIdentityManager {
     const val WIREGUARD_FILE = "aether-wg.toml"
     const val WIREGUARD_INNER_FILE = "aether-wg-secondary.toml"
 
-    /**
-     * The WireGuard key of WireGuard over MASQUE, beside [MASQUE_FILE] as the core names it. --register gool writes it
-     * as it writes the other keys; a scan or a connection without it has the core register one through the MASQUE
-     * tunnel, from inside WARP.
-     */
-    const val MASQUE_GOOL_FILE = "aether-masque-gool.toml"
-
     /** The key files of every kind, in the order the core registers them. */
-    internal val KEY_FILES = listOf(WIREGUARD_FILE, WIREGUARD_INNER_FILE, MASQUE_FILE, MASQUE_INNER_FILE, MASQUE_GOOL_FILE)
+    internal val KEY_FILES = listOf(WIREGUARD_FILE, WIREGUARD_INNER_FILE, MASQUE_FILE, MASQUE_INNER_FILE)
 
     private const val WORK_DIR = "aether"
 
@@ -76,10 +68,7 @@ object AetherIdentityManager {
      */
     private const val PREVIOUS_DIR = "aether-previous"
 
-    /**
-     * Five registrations, two MASQUE key enrollments and five WARP enablings at most, each of which the core may retry:
-     * a key is saved only once WARP is enabled on it.
-     */
+    /** Four registrations and two MASQUE key enrollments at most, each of which the core may retry. */
     private const val RENEW_TIMEOUT_MS = 4 * 60_000L
 
     /**
@@ -194,12 +183,6 @@ object AetherIdentityManager {
             read(File(workDir, MASQUE_FILE)),
             read(File(workDir, MASQUE_INNER_FILE)),
         )
-
-        AetherProtocol.WG_OVER_MASQUE -> AetherIdentityStatus(
-            protocol,
-            read(File(workDir, MASQUE_FILE)),
-            read(File(workDir, MASQUE_GOOL_FILE)),
-        )
     }
 
     /** The key files a registration of [kind] writes, in the order of [KEY_FILES]. */
@@ -209,7 +192,6 @@ object AetherIdentityManager {
         AetherKeyKind.MASQUE -> listOf(MASQUE_FILE)
         AetherKeyKind.GOOL -> listOf(WIREGUARD_FILE, WIREGUARD_INNER_FILE)
         AetherKeyKind.MIM -> listOf(MASQUE_FILE, MASQUE_INNER_FILE)
-        AetherKeyKind.WG_OVER_MASQUE -> listOf(MASQUE_FILE, MASQUE_GOOL_FILE)
     }
 
     /** The key files a tunnel of [protocol] uses: its own, and the inner hop's for a two-hop one. */
@@ -218,12 +200,11 @@ object AetherIdentityManager {
         AetherProtocol.WIREGUARD -> listOf(WIREGUARD_FILE)
         AetherProtocol.GOOL -> listOf(WIREGUARD_FILE, WIREGUARD_INNER_FILE)
         AetherProtocol.MIM -> listOf(MASQUE_FILE, MASQUE_INNER_FILE)
-        AetherProtocol.WG_OVER_MASQUE -> listOf(MASQUE_FILE, MASQUE_GOOL_FILE)
     }
 
     /**
-     * The key files a core on [arguments] needs, which the WARP keys page gets: those of the protocol they run, read
-     * as the core reads it, and none when they run Psiphon or Tor alone, with no WARP tunnel.
+     * The key files a core on [arguments] needs: those of the protocol they run, read as the core reads it, and none
+     * when they run Psiphon or Tor alone, with no WARP tunnel.
      */
     fun filesNeededBy(arguments: List<String>): List<String> =
         if (AetherCoreManager.psiphonModeOf(arguments) == AetherPsiphon.ONLY || AetherCoreManager.torModeOf(arguments) == AetherTor.ONLY) {
@@ -260,10 +241,7 @@ object AetherIdentityManager {
         return AetherIdentity(deviceId, fields["ipv4"].orEmpty(), fields["ipv6"].orEmpty())
     }
 
-    /**
-     * The tunnels over MASQUE share the MASQUE key and the others the WireGuard key; a two-hop tunnel adds a second key, of its
-     * kind or, for WireGuard over MASQUE, a WireGuard key of its own, which no other tunnel uses.
-     */
+    /** The tunnels over MASQUE share the MASQUE key and the others the WireGuard key; a two-hop tunnel adds a second key of its kind. */
     fun sharesIdentity(first: AetherProtocol, second: AetherProtocol): Boolean =
         first.overMasque == second.overMasque
 
@@ -274,16 +252,15 @@ object AetherIdentityManager {
      * once every one of [files] is there and reads as a key. Nothing in [workDir] is touched before
      * that moment, so whatever stops a renewal earlier leaves the keys in use as they were; a stop
      * after it is finished by [settle]. A key not among [files] stays as it is. True when the new
-     * keys took the place of the old ones. The steps on the files run on [io].
+     * keys took the place of the old ones.
      */
     internal suspend fun renew(
         workDir: File,
         renewalDir: File,
         files: List<String>,
-        io: CoroutineDispatcher = Dispatchers.IO,
         register: suspend () -> Boolean,
     ): Boolean {
-        val cleared = withContext(io) {
+        val cleared = withContext(Dispatchers.IO) {
             // A renewal whose keys were all ready is finished first; what one stopped earlier left is no key anyone uses.
             settle(workDir, renewalDir) && renewalDir.deleteRecursively() && renewalDir.mkdirs()
         }
@@ -294,14 +271,14 @@ object AetherIdentityManager {
         val ready = AtomicBoolean(false)
         try {
             if (register()) {
-                withContext(io) {
+                withContext(Dispatchers.IO) {
                     // A key the run left beside the ones asked for goes with the folder rather than into place.
                     (KEY_FILES - files.toSet()).forEach { File(renewalDir, it).delete() }
                     ready.set(isComplete(renewalDir, files) && markReady(renewalDir))
                 }
             }
         } finally {
-            withContext(NonCancellable + io) {
+            withContext(NonCancellable + Dispatchers.IO) {
                 if (ready.get()) settle(workDir, renewalDir) else renewalDir.deleteRecursively()
             }
         }

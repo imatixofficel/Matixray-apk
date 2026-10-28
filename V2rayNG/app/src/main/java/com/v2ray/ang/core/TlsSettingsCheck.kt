@@ -7,7 +7,7 @@ import com.v2ray.ang.enums.NetworkType
 import java.util.Locale
 
 /**
- * PattNG: TLS settings of a profile that the Xray-core fork would not apply, or with which it would not connect, so
+ * TLS settings of a profile that the Xray-core fork would not apply, or with which it would not connect, so
  * that the editor does not save them. Read from the fork's transport/internet/tls and its WebSocket and HTTPUpgrade
  * dialers.
  */

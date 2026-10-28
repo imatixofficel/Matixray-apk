@@ -24,7 +24,7 @@ class SettingsViewModel(application: Application) : BaseViewModel(application) {
     private val _systemVpnSettingsAvailable = MutableStateFlow(false)
     val systemVpnSettingsAvailable = _systemVpnSettingsAvailable.asStateFlow()
 
-    /** PattNG: the Aether listen port as the setting holds it, blank for the default. */
+    /** the Aether listen port as the setting holds it, blank for the default. */
     private val _aetherListenPort = MutableStateFlow("")
     val aetherListenPort: StateFlow<String> = _aetherListenPort.asStateFlow()
 
@@ -78,7 +78,7 @@ class SettingsViewModel(application: Application) : BaseViewModel(application) {
     }
 
     /**
-     * PattNG: stores [value] as the Aether listen port when [validateAetherListenPort] takes it, and
+     * stores [value] as the Aether listen port when [validateAetherListenPort] takes it, and
      * asks for the restart a changed setting needs, as the settings the screen stores itself do.
      */
     fun setAetherListenPort(value: String) {
@@ -93,7 +93,7 @@ class SettingsViewModel(application: Application) : BaseViewModel(application) {
     }
 
     /**
-     * PattNG: validates [value] as the Aether listen port: a port an app can listen on, which neither
+     * validates [value] as the Aether listen port: a port an app can listen on, which neither
      * it nor the three ports after it, the core's as well, shares with the local proxy.
      * Shows error toast if invalid.
      * @return The trimmed value if valid, null otherwise.

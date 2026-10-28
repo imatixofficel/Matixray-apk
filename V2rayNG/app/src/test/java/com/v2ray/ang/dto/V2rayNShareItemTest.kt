@@ -5,12 +5,12 @@ import com.v2ray.ang.enums.EConfigType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/** Unit tests for V2rayNShareItem, the profile JSON that v2rayN and PattN share. */
+/** Unit tests for V2rayNShareItem, the profile JSON that v2rayN and similar clients share. */
 class V2rayNShareItemTest {
 
     @Test
-    fun toProfileItem_readsTheEchOutboundThatPattNShares() {
-        // PattN shares ProfileItem.EchOutbound under this name, next to EchConfigList.
+    fun toProfileItem_readsTheEchOutboundThatOtherClientsShare() {
+        // Other clients share ProfileItem.EchOutbound under this name, next to EchConfigList.
         val echOutbound = """{"tag": "ech-out", "protocol": "freedom"}"""
         val item = Gson().fromJson(
             """

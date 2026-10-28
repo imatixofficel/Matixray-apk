@@ -1,5 +1,6 @@
 package com.v2ray.ang.ui.main
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -8,11 +9,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -25,15 +24,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.v2ray.ang.R
 import com.v2ray.ang.dto.entities.ProfileItem
-import com.v2ray.ang.extension.toastError
-import com.v2ray.ang.ui.compose.LocalDarkTheme
 import com.v2ray.ang.ui.compose.QRCodeDialog
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -41,10 +35,12 @@ import kotlinx.coroutines.launch
 @Composable
 fun MainScreen(
     mainViewModel: MainViewModel,
+    updateViewModel: UpdateViewModel,
     onAction: (MainAction) -> Unit,
     onNavigate: (MainDestination) -> Unit,
 ) {
     val uiState by mainViewModel.uiState.collectAsStateWithLifecycle()
+    val updateState by updateViewModel.state.collectAsStateWithLifecycle()
     val groups = uiState.groups
     val isLoading by mainViewModel.isLoading.collectAsStateWithLifecycle()
     val isRunning = uiState.isRunning
@@ -54,21 +50,12 @@ fun MainScreen(
     val confirmRemove = uiState.confirmRemove
     val shareQRCodeBitmap = uiState.shareQRCodeBitmap
 
-    // PattNG: a move of a profile the storage refused is told once, each refusal by its number, so that one set again
-    // right after the last was told is told too; the groups are shown anew, as stored.
-    val context = LocalContext.current
-    val failureText = stringResource(R.string.toast_failure)
-    val moveRefusal = uiState.moveRefusal
-    LaunchedEffect(moveRefusal) {
-        if (moveRefusal != null) {
-            context.toastError(failureText)
-            onAction(MainAction.MoveRefusalShown(moveRefusal))
-        }
-    }
-
-    val isDarkTheme = LocalDarkTheme.current
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    var selectedTabIndex by rememberSaveable { mutableStateOf(MainTab.Configs.ordinal) }
+    val selectedTab = MainTab.entries[selectedTabIndex.coerceIn(0, MainTab.entries.lastIndex)]
+    BackHandler(enabled = selectedTab != MainTab.Configs) {
+        selectedTabIndex = MainTab.Configs.ordinal
+    }
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showDelAllConfirm by remember { mutableStateOf(false) }
@@ -123,6 +110,13 @@ fun MainScreen(
             }
     }
 
+    UpdateDialog(
+        state = updateState,
+        onDownload = updateViewModel::startDownload,
+        onInstall = updateViewModel::install,
+        onDismiss = updateViewModel::dismiss
+    )
+
     MainDialogs(
         showDelAllConfirm = showDelAllConfirm,
         onDismissDelAll = { showDelAllConfirm = false },
@@ -153,84 +147,102 @@ fun MainScreen(
         QRCodeDialog(bitmap = shareQRCodeBitmap, onDismiss = { onAction(MainAction.DismissQRCodeDialog) })
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            MainDrawerContent(
-                drawerState = drawerState,
-                onNavigate = { route ->
-                    scope.launch { drawerState.close() }
-                    onNavigate(route)
-                }
-            )
+    val handleMoreMenu: (MainMoreMenuAction) -> Unit = { action ->
+        when (action) {
+                MainMoreMenuAction.RestartService -> onAction(MainAction.RestartService)
+                MainMoreMenuAction.DeleteAll -> showDelAllConfirm = true
+                MainMoreMenuAction.DeleteDuplicate -> showDelDuplicateConfirm = true
+                MainMoreMenuAction.DeleteInvalid -> showDelInvalidConfirm = true
+                MainMoreMenuAction.ExportAll -> onAction(MainAction.ExportAll)
+                MainMoreMenuAction.LocateSelected -> onAction(MainAction.LocateSelectedServer)
+                MainMoreMenuAction.SortByTestResults -> onAction(MainAction.SortByTestResults)
+                MainMoreMenuAction.TestAll -> onAction(MainAction.TestAllServers)
+                MainMoreMenuAction.TestAllRealPing -> onAction(MainAction.TestRealAllServers)
+                MainMoreMenuAction.UpdateSubscriptions -> onAction(MainAction.UpdateSubscriptions)
         }
-    ) {
-        Scaffold(
-            contentWindowInsets = ScaffoldDefaults.contentWindowInsets,
-            topBar = {
-                MainTopBar(
-                    isLoading = isLoading,
-                    showSearch = showSearch,
-                    searchQuery = searchQuery,
-                    onSearchQueryChange = { query: String ->
-                        searchQuery = query
-                        onAction(MainAction.Search(query))
-                    },
-                    onSearchClose = {
+    }
+
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = ScaffoldDefaults.contentWindowInsets,
+        topBar = {
+            MainTopBar(
+                tab = selectedTab,
+                isLoading = isLoading,
+                showSearch = showSearch,
+                searchQuery = searchQuery,
+                onSearchQueryChange = { query: String ->
+                    searchQuery = query
+                    onAction(MainAction.Search(query))
+                },
+                onSearchClose = {
+                    searchQuery = ""
+                    onAction(MainAction.Search(""))
+                    showSearch = false
+                },
+                onSearchToggle = { show: Boolean -> showSearch = show },
+                onAction = onAction,
+                onNavigate = onNavigate,
+                onOpenSettingsTab = { selectedTabIndex = MainTab.Settings.ordinal }
+            )
+        },
+        bottomBar = {
+            MainBottomBar(
+                displayText = displayText,
+                isRunning = isRunning,
+                selectedTab = selectedTab,
+                onTabSelected = { tab ->
+                    if (tab != MainTab.Configs && showSearch) {
                         searchQuery = ""
                         onAction(MainAction.Search(""))
                         showSearch = false
-                    },
-                    onSearchToggle = { show: Boolean -> showSearch = show },
-                    onMenuClick = { scope.launch { drawerState.open() } },
-                    onAction = onAction,
-                    onMoreMenuAction = { action ->
-                        when (action) {
-                            MainMoreMenuAction.RestartService -> onAction(MainAction.RestartService)
-                            MainMoreMenuAction.DeleteAll -> showDelAllConfirm = true
-                            MainMoreMenuAction.DeleteDuplicate -> showDelDuplicateConfirm = true
-                            MainMoreMenuAction.DeleteInvalid -> showDelInvalidConfirm = true
-                            MainMoreMenuAction.ExportAll -> onAction(MainAction.ExportAll)
-                            MainMoreMenuAction.LocateSelected -> onAction(MainAction.LocateSelectedServer)
-                            MainMoreMenuAction.SortByTestResults -> onAction(MainAction.SortByTestResults)
-                            MainMoreMenuAction.TestAll -> onAction(MainAction.TestAllServers)
-                            MainMoreMenuAction.TestAllRealPing -> onAction(MainAction.TestRealAllServers)
-                            MainMoreMenuAction.UpdateSubscriptions -> onAction(MainAction.UpdateSubscriptions)
-                        }
                     }
-                )
-            },
-            bottomBar = {
-                MainBottomBar(
-                    displayText = displayText,
-                    isRunning = isRunning,
-                    isDarkTheme = isDarkTheme,
-                    onAction = onAction
-                )
-            },
-            floatingActionButton = {},
-        ) { innerPadding ->
-            val layoutDirection = LocalLayoutDirection.current
+                    selectedTabIndex = tab.ordinal
+                },
+                onAction = onAction
+            )
+        },
+    ) { innerPadding ->
+        when (selectedTab) {
+            MainTab.Home -> HomeTab(
+                isRunning = isRunning,
+                displayText = displayText,
+                selectedGuid = selectedGuid,
+                onNavigate = onNavigate,
+                modifier = Modifier.padding(innerPadding)
+            )
 
-            if (groups.isNotEmpty()) {
+            MainTab.Settings -> SettingsTab(
+                onNavigate = onNavigate,
+                modifier = Modifier.padding(innerPadding)
+            )
+
+            MainTab.Configs -> if (groups.isNotEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    if (groups.size > 1) {
-                        GroupTabBar(
-                            groups = groups,
-                            selectedTabIndex = pagerState.currentPage.coerceIn(0, groups.lastIndex),
-                            mainViewModel = mainViewModel,
-                            onTabClick = { targetIndex ->
-                                scope.launch {
-                                    pagerState.navigateToPageOptimized(
-                                        targetPage = targetIndex,
-                                        animateAdjacentPage = true
-                                    )
-                                }
+                    if (groups.size > 1) GroupTabBar(
+                        groups = groups,
+                        selectedTabIndex = pagerState.currentPage.coerceIn(0, groups.lastIndex),
+                        mainViewModel = mainViewModel,
+                        onTabClick = { targetIndex ->
+                            scope.launch {
+                                pagerState.navigateToPageOptimized(
+                                    targetPage = targetIndex,
+                                    animateAdjacentPage = true
+                                )
                             }
+                        }
+                    )
+
+                    groups.getOrNull(pagerState.currentPage)?.let { currentGroup ->
+                        GroupHeaderCard(
+                            group = currentGroup,
+                            mainViewModel = mainViewModel,
+                            onPingGroup = { onAction(MainAction.TestRealAllServers) },
+                            onMoreMenuAction = handleMoreMenu
                         )
                     }
 
@@ -261,18 +273,16 @@ fun MainScreen(
                                 shareTarget = Triple(guid, profile, true)
                             },
                             onRemoveServer = removeServer,
-                            usageInfo = group.usageInfo,
-                            groupTitle = group.remarks,
-                            onOpenLink = { url -> onAction(MainAction.OpenSubscriptionLink(url)) },
                             contentPadding = PaddingValues(
                                 start = 0.dp,
                                 top = 0.dp,
                                 end = 0.dp,
-                                bottom = 80.dp
+                                bottom = 12.dp
                             )
                         )
                     }
                 }
+            } else {
             }
         }
     }

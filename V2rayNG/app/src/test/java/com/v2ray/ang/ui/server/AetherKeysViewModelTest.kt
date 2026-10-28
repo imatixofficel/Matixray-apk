@@ -4,14 +4,11 @@ import android.app.Application
 import android.util.Log
 import com.v2ray.ang.R
 import com.v2ray.ang.core.AetherExit
-import com.v2ray.ang.core.AetherExitNode
 import com.v2ray.ang.core.AetherIdentity
 import com.v2ray.ang.core.AetherIdentityManager
 import com.v2ray.ang.core.AetherKey
 import com.v2ray.ang.core.AetherKeys
 import com.v2ray.ang.core.AetherKeysSettings
-import com.v2ray.ang.core.ExitNodeOutbound
-import com.v2ray.ang.dto.V2rayConfig
 import com.v2ray.ang.enums.AetherFingerprint
 import com.v2ray.ang.enums.AetherKeyKind
 import com.v2ray.ang.enums.AetherProtocol
@@ -49,8 +46,6 @@ class AetherKeysViewModelTest {
         var inUse: List<AetherKey> = AetherIdentityManager.KEY_FILES.map { AetherKey(it, null) }
         val runs = mutableListOf<Run>()
         var renewer: suspend ((String) -> Unit) -> List<AetherKey>? = { null }
-        var nodes: List<AetherExitNode> = emptyList()
-        val found = mutableMapOf<String, ExitNodeOutbound>()
 
         override suspend fun isCoreAvailable() = available
         override suspend fun activeSession() = session
@@ -64,9 +59,6 @@ class AetherKeysViewModelTest {
             runs += Run(kind, arguments, exit)
             return renewer(onOutput)
         }
-
-        override suspend fun exitNodes() = nodes
-        override suspend fun findExitNode(name: String) = found[name] ?: ExitNodeOutbound.NotFound
     }
 
     private val source = FakeSource()
@@ -100,7 +92,6 @@ class AetherKeysViewModelTest {
             AetherKey(AetherIdentityManager.WIREGUARD_INNER_FILE, null),
             AetherKey(AetherIdentityManager.MASQUE_FILE, oldKey),
             AetherKey(AetherIdentityManager.MASQUE_INNER_FILE, null),
-            AetherKey(AetherIdentityManager.MASQUE_GOOL_FILE, oldKey),
         )
         val viewModel = viewModel()
 
@@ -116,7 +107,6 @@ class AetherKeysViewModelTest {
                 resource(R.string.aether_log_wireguard_inner_key_missing),
                 resource(R.string.aether_log_masque_key_ready, "a1b2c3d4…", "172.16.0.2", "2606:4700:110:8a36::1"),
                 resource(R.string.aether_log_masque_inner_key_missing),
-                resource(R.string.aether_log_gool_key_ready, "a1b2c3d4…", "172.16.0.2", "2606:4700:110:8a36::1"),
             ),
             viewModel.texts()
         )
@@ -128,8 +118,6 @@ class AetherKeysViewModelTest {
 
         viewModel.setKind(AetherKeyKind.MIM)
         viewModel.setEnrollAddress("188.114.97.6:443")
-        viewModel.setApiSni("api.devices.cloudflare.com")
-        viewModel.setApiHost("api.devices.cloudflare.com")
         viewModel.setEch(true)
         viewModel.setEchDns("https://1.1.1.1/dns-query")
         viewModel.setEchDomain("example.com")
@@ -140,8 +128,6 @@ class AetherKeysViewModelTest {
         val expected = AetherKeysSettings(
             kind = AetherKeyKind.MIM,
             enrollAddress = "188.114.97.6:443",
-            apiSni = "api.devices.cloudflare.com",
-            apiHost = "api.devices.cloudflare.com",
             ech = true,
             echDns = "https://1.1.1.1/dns-query",
             echDomain = "example.com",
@@ -150,33 +136,12 @@ class AetherKeysViewModelTest {
             dialMode = "ForceIP",
         )
         assertEquals(expected, viewModel.settings)
-        assertEquals(10, source.saved.size)
+        assertEquals(8, source.saved.size)
         assertEquals(expected, source.saved.last())
 
         // A change to what is already there saves nothing.
         viewModel.setKind(AetherKeyKind.MIM)
-        assertEquals(10, source.saved.size)
-    }
-
-    @Test
-    fun defaultInTheListsOfTheApiFieldsBlanksThemForTheCoresOwn() {
-        val viewModel = viewModel()
-        viewModel.setEnrollAddress("188.114.97.6:443")
-        viewModel.setApiSni("api.cloudflareclient.com")
-        viewModel.setApiHost("api.cloudflareclient.com")
-        assertTrue("--api-sni" in AetherKeys.arguments(viewModel.settings!!))
-
-        // What the default entry of each field's list sets: a blank, the core's own.
-        viewModel.setEnrollAddress("")
-        viewModel.setApiSni("")
-        viewModel.setApiHost("")
-
-        val settings = viewModel.settings!!
-        assertEquals("", settings.enrollAddress)
-        assertEquals("", settings.apiSni)
-        assertEquals("", settings.apiHost)
-        assertEquals(settings, source.saved.last())
-        assertFalse(AetherKeys.arguments(settings).any { it.startsWith("--api-") }, "no API option goes to the core")
+        assertEquals(8, source.saved.size)
     }
 
     @Test
@@ -258,57 +223,6 @@ class AetherKeysViewModelTest {
     }
 
     @Test
-    fun theProfilesThatCanBeTheExitNodeAreReadAndWhatIsChosenIsKept() {
-        source.nodes = listOf(AetherExitNode("germany", 1))
-        val viewModel = viewModel()
-        assertEquals(source.nodes, viewModel.exitNodes.value)
-
-        viewModel.setExitNode("germany")
-        viewModel.setFragment(true)
-        viewModel.setFragmentSize("8-16")
-        viewModel.setFragmentDelay("5")
-        val kept = AetherKeysSettings(exitNode = "germany", fragment = true, fragmentSize = "8-16", fragmentDelay = "5")
-        assertEquals(kept, viewModel.settings)
-        assertEquals(kept, source.saved.last())
-        viewModel.setExitNode("")
-        assertEquals("", source.saved.last().exitNode)
-    }
-
-    @Test
-    fun aRunDoesNotDialOutThroughAnExitNodeNameThatFindsNoProfileOrSeveral() {
-        source.stored = AetherKeysSettings(exitNode = " germany ")
-        val viewModel = viewModel()
-
-        // Renamed or deleted since the page opened.
-        viewModel.getKeys()
-        assertEquals(AetherKeysNotice.Invalid(R.string.toast_profile_name_not_found, listOf("germany")), viewModel.notice.value)
-        assertTrue(source.runs.isEmpty())
-        assertFalse(viewModel.isRenewing.value)
-
-        // The name of two profiles by now.
-        viewModel.onNoticeShown()
-        source.found["germany"] = ExitNodeOutbound.SameName
-        viewModel.getKeys()
-        assertEquals(AetherKeysNotice.Invalid(R.string.toast_profile_name_duplicate, listOf("germany")), viewModel.notice.value)
-        assertTrue(source.runs.isEmpty())
-
-        // Once one profile has it, the run dials out through it.
-        viewModel.onNoticeShown()
-        source.found["germany"] = ExitNodeOutbound.Built(V2rayConfig.OutboundBean(tag = "proxy", protocol = "vless"))
-        viewModel.getKeys()
-        assertEquals(AetherExit(node = "germany"), source.runs.single().exit)
-    }
-
-    @Test
-    fun aFragmentShapeThatIsNoRangeIsToldAndNothingRuns() {
-        source.stored = AetherKeysSettings(fragment = true, fragmentSize = "0")
-        val viewModel = viewModel()
-        viewModel.getKeys()
-        assertEquals(AetherKeysNotice.Invalid(R.string.aether_invalid_fragment), viewModel.notice.value)
-        assertTrue(source.runs.isEmpty())
-    }
-
-    @Test
     fun settingsThatCannotRunAreToldAndNothingRuns() {
         val viewModel = viewModel()
         val opened = viewModel.texts()
@@ -319,18 +233,6 @@ class AetherKeysViewModelTest {
         viewModel.onNoticeShown()
 
         viewModel.setEnrollAddress("")
-        viewModel.setApiSni("162.159.137.105")
-        viewModel.getKeys()
-        assertEquals(AetherKeysNotice.Invalid(R.string.aether_keys_invalid_api_sni), viewModel.notice.value)
-        viewModel.onNoticeShown()
-
-        viewModel.setApiSni("")
-        viewModel.setApiHost("https://api.devices.cloudflare.com")
-        viewModel.getKeys()
-        assertEquals(AetherKeysNotice.Invalid(R.string.aether_keys_invalid_api_host), viewModel.notice.value)
-        viewModel.onNoticeShown()
-
-        viewModel.setApiHost("")
         viewModel.setCommand("aether --protocol wg")
         viewModel.getKeys()
         assertEquals(AetherKeysNotice.Invalid(R.string.aether_keys_invalid_command), viewModel.notice.value)
@@ -344,8 +246,6 @@ class AetherKeysViewModelTest {
     fun eachProblemHasItsMessage() {
         val messages = AetherKeys.Problem.entries.associateWith { AetherKeysViewModel.messageOf(it) }
         assertEquals(R.string.aether_keys_invalid_enroll_address, messages[AetherKeys.Problem.INVALID_ENROLL_ADDRESS])
-        assertEquals(R.string.aether_keys_invalid_api_sni, messages[AetherKeys.Problem.INVALID_API_SNI])
-        assertEquals(R.string.aether_keys_invalid_api_host, messages[AetherKeys.Problem.INVALID_API_HOST])
         assertEquals(R.string.aether_invalid_ech_dns, messages[AetherKeys.Problem.INVALID_ECH_DNS])
         assertEquals(R.string.aether_invalid_ech_domain, messages[AetherKeys.Problem.INVALID_ECH_DOMAIN])
         assertEquals(R.string.aether_lab_exit_final_mask, messages[AetherKeys.Problem.INVALID_FINAL_MASK])

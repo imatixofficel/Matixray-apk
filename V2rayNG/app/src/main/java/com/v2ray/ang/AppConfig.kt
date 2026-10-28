@@ -39,6 +39,11 @@ object AppConfig {
     const val PREF_MUX_CONCURRENCY = "pref_mux_concurrency"
     const val PREF_MUX_XUDP_CONCURRENCY = "pref_mux_xudp_concurrency"
     const val PREF_MUX_XUDP_QUIC = "pref_mux_xudp_quic"
+    const val PREF_FRAGMENT_ENABLED = "pref_fragment_enabled"
+    const val PREF_FRAGMENT_PACKETS = "pref_fragment_packets"
+    const val PREF_FRAGMENT_LENGTH = "pref_fragment_length"
+    const val PREF_FRAGMENT_INTERVAL = "pref_fragment_interval"
+    const val PREF_FRAGMENT_MAXSPLIT = "pref_fragment_maxsplit"
     const val PREF_OBSERVATORY_LEAST_PING_INTERVAL = "pref_observatory_least_ping_interval"
     const val PREF_OBSERVATORY_LEAST_LOAD_INTERVAL = "pref_observatory_least_load_interval"
     const val PREF_OBSERVATORY_LEAST_LOAD_METHOD = "pref_observatory_least_load_method"
@@ -64,22 +69,16 @@ object AppConfig {
     const val PREF_SOCKS_PASSWORD = "pref_socks_password"
     const val PREF_SOCKS_ENABLE_UDP = "pref_socks_enable_udp"
 
-    /** PattNG: the loopback port every Aether core listens on, whatever its profile; see SettingsManager.getAetherListenPort. */
+    /** the loopback port every Aether core listens on, whatever its profile; see SettingsManager.getAetherListenPort. */
     const val PREF_AETHER_LISTEN_PORT = "pref_aether_listen_port"
 
-    /** PattNG: the settings of the page that gets new WARP keys, which no profile shares; see AetherKeysSettings. */
+    /** the settings of the page that gets new WARP keys, which no profile shares; see AetherKeysSettings. */
     const val PREF_AETHER_KEYS_KIND = "pref_aether_keys_kind"
     const val PREF_AETHER_KEYS_ENROLL_ADDRESS = "pref_aether_keys_enroll_address"
-    const val PREF_AETHER_KEYS_API_SNI = "pref_aether_keys_api_sni"
-    const val PREF_AETHER_KEYS_API_HOST = "pref_aether_keys_api_host"
-    const val PREF_AETHER_KEYS_FRAGMENT = "pref_aether_keys_fragment"
-    const val PREF_AETHER_KEYS_FRAGMENT_SIZE = "pref_aether_keys_fragment_size"
-    const val PREF_AETHER_KEYS_FRAGMENT_DELAY = "pref_aether_keys_fragment_delay"
     const val PREF_AETHER_KEYS_ECH = "pref_aether_keys_ech"
     const val PREF_AETHER_KEYS_ECH_DNS = "pref_aether_keys_ech_dns"
     const val PREF_AETHER_KEYS_ECH_DOMAIN = "pref_aether_keys_ech_domain"
     const val PREF_AETHER_KEYS_FINGERPRINT = "pref_aether_keys_fingerprint"
-    const val PREF_AETHER_KEYS_EXIT_NODE = "pref_aether_keys_exit_node"
     const val PREF_AETHER_KEYS_FINAL_MASK = "pref_aether_keys_final_mask"
     const val PREF_AETHER_KEYS_DIAL_MODE = "pref_aether_keys_dial_mode"
     const val PREF_AETHER_KEYS_COMMAND = "pref_aether_keys_command"
@@ -133,12 +132,13 @@ object AppConfig {
     const val TAG_PROXY = "proxy"
     const val TAG_DIRECT = "direct"
     const val TAG_BLOCKED = "block"
+    const val TAG_FRAGMENT = "fragment"
     const val TAG_DNS = "dns-module"
     const val TAG_DOMESTIC_DNS = "domestic-dns"
     const val TAG_BALANCER = "balancer-main"
     const val TAG_BALANCER_PRE = "balancer"
 
-    /** PattNG: the inbound the Aether core dials out through, and the outbound its traffic leaves Xray by. */
+    /** the inbound the Aether core dials out through, and the outbound its traffic leaves Xray by. */
     const val TAG_SECONDARY_SOCKS = "secondary-socks"
     const val TAG_EXIT_NODE = "exit-node"
 
@@ -151,14 +151,7 @@ object AppConfig {
     const val GITHUB_RAW_URL = "https://raw.githubusercontent.com"
     const val GITHUB_DOWNLOAD_URL = "$GITHUB_URL/%s/releases/latest/download"
     const val ANDROID_PACKAGE_NAME_LIST_URL = "$GITHUB_RAW_URL/2dust/androidpackagenamelist/master/proxy.txt"
-    const val APP_URL = "$GITHUB_URL/patterniha/PattNG"
-    const val APP_API_URL = "https://api.github.com/repos/patterniha/PattNG/releases"
-    const val APP_ISSUES_URL = "$APP_URL/issues"
-    const val AETHER_URL = "$GITHUB_URL/CluvexStudio/aether"
-    const val APP_WIKI_MODE = "$APP_URL/wiki/Mode"
-    const val APP_PRIVACY_POLICY = "$GITHUB_RAW_URL/2dust/v2rayNG/master/CR.md"
-    const val APP_PROMOTION_URL = "aHR0cHM6Ly85LjIzNDQ1Ni54eXovYWJjLmh0bWw="
-    const val TG_CHANNEL_URL = "https://t.me/github_2dust"
+    const val UPDATE_API_URL = "https://api.github.com/repos/imatixofficel/Matixray-Client/releases/latest"
     const val DELAY_TEST_URL = "https://www.gstatic.com/generate_204"
     const val DELAY_TEST_URL2 = "https://www.google.com/generate_204"
     const val OBSERVATORY_LEAST_PING_INTERVAL = "3m"
@@ -171,7 +164,7 @@ object AppConfig {
     const val IP_API_URL = "https://api.ip.sb/geoip"
 
     /** DNS server addresses. */
-    const val DNS_PROXY = "https://8.8.8.8/dns-query"
+    const val DNS_PROXY = "https://dns.google/dns-query"
     const val DNS_DIRECT = "localhost"
     const val DNS_VPN = "8.8.8.8"
     const val GEOSITE_PRIVATE = "geosite:private"
@@ -197,15 +190,12 @@ object AppConfig {
     const val PORT_SOCKS = "10808"
     const val PORT_AETHER_SOCKS = "10819"
 
-    /** PattNG: where the Aether core asks for the ECH key, and the domain whose key it takes, unless a profile names others. */
+    /** where the Aether core asks for the ECH key, and the domain whose key it takes, unless a profile names others. */
     const val AETHER_ECH_DNS = "udp://1.1.1.1"
     const val AETHER_ECH_DOMAIN = "cloudflare-ech.com"
 
-    /**
-     * PattNG: the server name the MASQUE handshakes of the Aether core put in their ClientHello, unless a profile names
-     * another; the core's own default as well. The HTTP host of the CONNECT request stays the core's.
-     */
-    const val AETHER_MASQUE_SNI = "www.cloudflare.com"
+    /** where the Aether core sends the calls to the WARP API, which register and enroll the keys, unless told otherwise. */
+    const val AETHER_ENROLL_ADDRESS = "api.cloudflareclient.com"
 
     const val WIREGUARD_LOCAL_ADDRESS_V4 = "172.16.0.2/32"
     const val WIREGUARD_LOCAL_ADDRESS_V6 = "2606:4700:110:8f81:d551:a0:532e:a2b3/128"
@@ -215,7 +205,6 @@ object AppConfig {
 
     /** Shared defaults for settings shown in the UI and consumed by config generation. */
     const val DEFAULT_SOCKS_ENABLE_UDP = true
-    const val DEFAULT_IPV6_ENABLED = true
     const val DEFAULT_OUTBOUND_DOMAIN_RESOLVE_METHOD = "0"
     const val DEFAULT_VPN_BYPASS_LAN = "1"
     const val DEFAULT_HEV_TUNNEL_LOGLEVEL = "warn"
@@ -301,7 +290,6 @@ object AppConfig {
     const val ROOT_TUN2SOCKS_BIN = "libhevsockstun.so"
     const val ROOT_FWD_CHAIN = "CORE_FWD"   // FORWARD chain for LAN/tethering sharing
     const val ROOT_DNS_CHAIN = "CORE_DNS"   // nat chain for tethered-client DNS DNAT
-    const val ROOT_DNS_OUT_CHAIN = "CORE_DNS_OUT"  // nat chain for device DNS DNAT (root mode)
     const val ROOT_V6_CHAIN = "CORE6_FILTER"       // ip6tables filter/OUTPUT chain: blackhole native IPv6 when it isn't tunneled
     const val ROOT_V6_FWD_CHAIN = "CORE6_FWD" // ip6tables FORWARD chain: route or reject tethered clients' native IPv6
     const val ROOT_V6_PRE_CHAIN = "CORE6_PRE" // ip6tables mangle/PREROUTING chain: mark forwarded clients' IPv6 into the tun
@@ -335,14 +323,8 @@ object AppConfig {
     const val DEFAULT_SECURITY = "auto"
     const val DEFAULT_NETWORK = "tcp"
 
-    /** Xray's default targetStrategy, and the default of most profile types; an outbound with it carries none. */
+    /** Xray's default targetStrategy; a profile stores null for it and its outbound carries none. */
     const val TARGET_STRATEGY_AS_IS = "AsIs"
-
-    /**
-     * The default targetStrategy of an Aether profile whose traffic leaves through WARP, see
-     * CoreOutboundBuilder.defaultTargetStrategy.
-     */
-    const val TARGET_STRATEGY_FORCE_IPV4V6 = "ForceIPv4v6"
     const val TLS = "tls"
     const val REALITY = "reality"
     const val HEADER_TYPE_HTTP = "http"

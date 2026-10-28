@@ -98,7 +98,7 @@ object CoreNativeManager {
     }
 
     /**
-     * PattNG: opens the exit of this process's Xray and returns the port of its inbound: a mixed inbound
+     * opens the exit of this process's Xray and returns the port of its inbound: a mixed inbound
      * on the loopback address, which stays, with its routing rule, while the instance runs. Its exit-node
      * is the outbound tagged exit-node of [configuration], the JSON of an Xray configuration, and comes
      * with the outbounds it dials through; of the rest only the log counts, should the exit start the

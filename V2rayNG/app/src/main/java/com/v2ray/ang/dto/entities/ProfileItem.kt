@@ -79,26 +79,17 @@ data class ProfileItem(
 
     var dialMode: String? = null,
 
-    /**
-     * Xray targetStrategy of the outbound built for this profile; null means the profile's default, see
-     * CoreOutboundBuilder.defaultTargetStrategy.
-     */
+    /** Xray targetStrategy of the outbound built for this profile; null means the default, AsIs. */
     var targetStrategy: String? = null,
 
     var aetherProtocol: String? = null,
     var aetherTransport: String? = null,
-
-    /**
-     * The server name the MASQUE handshakes put in their ClientHello, the core's --masque-sni; null means
-     * AppConfig.AETHER_MASQUE_SNI. Only a MASQUE tunnel takes it.
-     */
-    var aetherMasqueSni: String? = null,
     var aetherScanMode: String? = null,
     var aetherObfuscation: String? = null,
 
     /**
-     * The ClientHello of the core's TLS handshakes, an AetherFingerprint type: its cipher suites, groups, key shares,
-     * signature algorithms and extensions; null means Chrome's. Only a MASQUE tunnel takes it.
+     * The ClientHello of the core's TLS handshakes, an AetherFingerprint type: its TLS 1.2 cipher suites and whether it
+     * carries GREASE; null means Chrome's. Only a MASQUE tunnel takes it.
      */
     var aetherFingerprint: String? = null,
     var aetherIpVersion: String? = null,
@@ -122,14 +113,6 @@ data class ProfileItem(
 
     /** The exit rule the core holds the tunnel to: country codes to allow, or with a leading ! to refuse; null means any exit. */
     var aetherExitLoc: String? = null,
-
-    /**
-     * The name of the profile the core dials out through: its outbound is the exit-node, as a proxy chain's hop is.
-     * Like the hops of a chain, it goes by its name, which a subscription's update keeps while it gives every profile
-     * a new guid. Null means freedom, with the finalMask and the dialMode of this profile. No link carries it: the
-     * name is that of a profile of this device.
-     */
-    var aetherExitNode: String? = null,
 
     /**
      * The loopback port the Aether core of this profile listened on, from before every core came to
@@ -168,42 +151,6 @@ data class ProfileItem(
     companion object {
         fun create(configType: EConfigType): ProfileItem =
             ProfileItem(configType = configType)
-
-        /**
-         * PattNG: the names of the members of a proxy chain, as [proxyChainProfilesOf] writes them into
-         * [proxyChainProfiles], in their order: separated by commas, a comma or a backslash that is part of a name
-         * written after a backslash. A chain written before, whose names had no backslash, reads as it did.
-         */
-        fun proxyChainMembersOf(text: String?): List<String> {
-            if (text.isNullOrEmpty()) return emptyList()
-            val members = mutableListOf<String>()
-            val member = StringBuilder()
-            var index = 0
-            while (index < text.length) {
-                val char = text[index]
-                val next = text.getOrNull(index + 1)
-                when {
-                    char == '\\' && (next == ',' || next == '\\') -> {
-                        member.append(next)
-                        index++
-                    }
-
-                    char == ',' -> {
-                        members += member.toString()
-                        member.clear()
-                    }
-
-                    else -> member.append(char)
-                }
-                index++
-            }
-            members += member.toString()
-            return members
-        }
-
-        /** PattNG: [members], the names of the members of a proxy chain in their order, as [proxyChainProfiles] holds them. */
-        fun proxyChainProfilesOf(members: List<String>): String =
-            members.joinToString(",") { it.replace("\\", "\\\\").replace(",", "\\,") }
     }
 
     fun getServerAddressAndPort(): String {

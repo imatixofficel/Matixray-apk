@@ -11,7 +11,6 @@ import com.v2ray.ang.dto.UrlContentRequest
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.dto.entities.SubscriptionCache
 import com.v2ray.ang.dto.entities.SubscriptionItem
-import com.v2ray.ang.dto.entities.SubscriptionUsageInfo
 import com.v2ray.ang.enums.EConfigType
 import com.v2ray.ang.extension.isNotNullEmpty
 import com.v2ray.ang.fmt.AetherFmt
@@ -29,7 +28,6 @@ import com.v2ray.ang.util.JsonUtil
 import com.v2ray.ang.util.LogUtil
 import com.v2ray.ang.util.QRCodeDecoder
 import com.v2ray.ang.util.Utils
-import okhttp3.Headers
 import java.net.URI
 
 object AngConfigManager {
@@ -272,7 +270,7 @@ object AngConfigManager {
 
             val v2raynConfigs = V2rayNFmt.parse(v2raynLines, subid)
             val allConfigs = v2raynConfigs + configs
-            // PattNG: WebSocket and HTTPUpgrade connect only with alpn http/1.1 or none, which shared links often lack
+            // WebSocket and HTTPUpgrade connect only with alpn http/1.1 or none, which shared links often lack
             allConfigs.forEach(TlsSettingsCheck::fixImportedAlpn)
 
             if (allConfigs.isNotEmpty()) {
@@ -511,17 +509,6 @@ object AngConfigManager {
             val proxyUsername = SettingsManager.getSocksUsername()
             val proxyPassword = SettingsManager.getSocksPassword()
 
-            // Account info (traffic, expiry, support link) the panel sends in the response headers.
-            var usageInfo: SubscriptionUsageInfo? = null
-            val captureUsageInfo: (Headers) -> Unit = { headers ->
-                usageInfo = SubscriptionInfoParser.parse(
-                    userInfo = headers["Subscription-Userinfo"],
-                    profileTitle = headers["Profile-Title"],
-                    supportUrl = headers["Support-Url"],
-                    webPageUrl = headers["Profile-Web-Page-Url"],
-                )
-            }
-
             var configText = try {
                 val httpPort = SettingsManager.getHttpPort()
                 HttpUtil.getUrlContentWithUserAgent(
@@ -533,8 +520,7 @@ object AngConfigManager {
                         httpPort = httpPort,
                         proxyUsername = proxyUsername,
                         proxyPassword = proxyPassword
-                    ),
-                    captureUsageInfo
+                    )
                 )
             } catch (e: Exception) {
                 LogUtil.e(AppConfig.ANG_PACKAGE, "Update subscription: proxy not ready or other error", e)
@@ -547,8 +533,7 @@ object AngConfigManager {
                             url = url,
                             userAgent = userAgent,
                             requestHeaders = requestHeaders
-                        ),
-                        captureUsageInfo
+                        )
                     )
                 } catch (e: Exception) {
                     LogUtil.e(AppConfig.TAG, "Update subscription: Failed to get URL content with user agent", e)
@@ -562,15 +547,7 @@ object AngConfigManager {
             val count = parseConfigViaSub(configText, it.guid, false)
             if (count > 0) {
                 it.subscription.lastUpdated = System.currentTimeMillis()
-                // Replaced on every successful update so the box disappears if the panel stops sending the headers.
-                it.subscription.usageInfo = usageInfo
-                // PattNG: the time and the usage info go onto the subscription as stored now, which keeps what an edit
-                // wrote during the download; one removed meanwhile is not listed again, and the profiles just stored for
-                // it go with it.
-                if (!MmkvManager.finishSubscriptionUpdate(it.guid, it.subscription.lastUpdated, it.subscription.usageInfo)) {
-                    LogUtil.i(AppConfig.TAG, "Subscription removed during its update: ${it.guid}")
-                    return SubscriptionUpdateResult(skipCount = 1)
-                }
+                MmkvManager.encodeSubscription(it.guid, it.subscription)
                 LogUtil.i(AppConfig.TAG, "Subscription updated: ${it.subscription.remarks}, $count configs")
                 return SubscriptionUpdateResult(
                     configCount = count,
@@ -592,10 +569,12 @@ object AngConfigManager {
      * @param subId The subscription ID.
      */
     fun removeInvalidServer(subId: String) {
-        // PattNG: among the profiles listed under the profile index lock, so that a profile an update stored, or a delete
-        // of the subscription removed, meanwhile, is not undone, by their results under the lock of the test results, so
-        // that a test passing one meanwhile keeps it; a refusal is logged there.
-        MmkvManager.tryRemoveFailedServers(subId)
+        val serverList = MmkvManager.decodeServerList(subId)
+        val invalidServers = serverList.filter {
+            val aff = MmkvManager.decodeServerAffiliationInfo(it)
+            aff != null && aff.testDelayMillis < 0L
+        }
+        MmkvManager.removeServers(invalidServers, subId)
     }
 
     /**
@@ -604,12 +583,19 @@ object AngConfigManager {
      * @param subId The subscription ID.
      */
     fun sortByTestResultsForSub(subId: String) {
-        // PattNG: the list as stored under the profile index lock, so that a profile an update stored, or a delete of the
-        // subscription removed, meanwhile, is not undone; a refusal is logged there.
-        MmkvManager.trySortServerList(subId) { guid ->
-            val delay = MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
-            if (delay <= 0L) Long.MAX_VALUE else delay
-        }
+        val serverList = MmkvManager.decodeServerList(subId)
+        if (serverList.isEmpty()) return
+
+        val sorted = serverList
+            .map { guid ->
+                val delay =
+                    MmkvManager.decodeServerAffiliationInfo(guid)?.testDelayMillis ?: 0L
+                guid to if (delay <= 0L) Long.MAX_VALUE else delay
+            }
+            .sortedBy { it.second }
+            .map { it.first }
+            .toMutableList()
+        MmkvManager.encodeServerList(sorted, subId)
     }
 
     /**
@@ -648,8 +634,8 @@ object AngConfigManager {
         val subItem = SubscriptionItem()
         subItem.remarks = uri.fragment ?: "import sub"
         subItem.url = url
-        // PattNG: stored and listed in one hold of the profile index lock, checked; a refusal is logged there.
-        return if (MmkvManager.tryEncodeSubscription("", subItem) != null) 1 else 0
+        MmkvManager.encodeSubscription("", subItem)
+        return 1
     }
 
     /** Generates a description for the profile.

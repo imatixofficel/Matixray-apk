@@ -50,7 +50,7 @@ class Hysteria2FmtTest {
 
     @Test
     fun test_toUriAndParse_roundTripPreservesFinalMask() {
-        // PattNG: parse reads fm as the other links do, so toUri writes it as well.
+        // parse reads fm as the other links do, so toUri writes it as well.
         val json = """{"udp": [{"type": "salamander", "settings": {"password": "fm-pass"}}]}"""
         val config = createConfig().apply { finalMask = json }
 

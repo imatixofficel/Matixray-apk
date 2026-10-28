@@ -11,8 +11,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
 
 /**
@@ -23,35 +21,20 @@ import kotlinx.coroutines.launch
  * connection. Deciding that a handover happened is what this class is for, acting on it is not.
  *
  * Only used from Android P and above, see CoreServiceManager.startNetworkMonitor().
- * After the debounce window, on a background thread, a handover is first claimed with [claimHandover]
- * while this monitor is registered, under the gate that [unregister] closes first: it has to be short,
- * and once unregister() has returned no handover is claimed. Only a claimed handover goes on to
- * [onHandover], which may block. Both are passed this monitor. [describe] names the run mode and the
- * profile of the service it watches, for its failure logs.
+ * [onHandover] is invoked on a background thread after the debounce window and may block.
  */
 class NetworkMonitor(
     private val connectivity: ConnectivityManager,
     private val onUnderlyingNetworksChanged: (Array<Network>?) -> Unit,
-    private val claimHandover: (NetworkMonitor) -> Boolean,
-    private val onHandover: (NetworkMonitor) -> Unit,
-    private val describe: () -> String,
+    private val onHandover: () -> Unit,
 ) {
     private companion object {
         const val HANDOVER_DEBOUNCE_MS = 1000L
     }
 
-    // PattNG: the network callbacks run on a thread of ConnectivityManager, register and unregister on the main
-    // thread, so the state below is read and written under this lock.
-    private val lock = Any()
     private var upstream: Network? = null
     private var handoverJob: Job? = null
     private var registered = false
-
-    /** PattNG: lets a handover be claimed from register() until unregister(), see [claimHandover]. */
-    private val gate = HandoverGate()
-
-    /** PattNG: owns the handover work, which [unregister] cancels. */
-    private val handoverScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Unfortunately registerDefaultNetworkCallback is going to return our VPN interface:
@@ -72,7 +55,8 @@ class NetworkMonitor(
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            val previous = synchronized(lock) { upstream.also { upstream = network } }
+            val previous = upstream
+            upstream = network
             onUnderlyingNetworksChanged(arrayOf(network))
             if (previous != null && previous != network) {
                 scheduleHandover(network)
@@ -93,58 +77,42 @@ class NetworkMonitor(
      * Starts watching. Safe to call more than once, only the first call registers.
      */
     fun register() {
-        synchronized(lock) {
-            if (registered) return
-            try {
-                connectivity.requestNetwork(request, callback)
-                registered = true
-                gate.open()
-            } catch (e: Exception) {
-                LogUtil.e(AppConfig.TAG, "NetworkMonitor: ${describe()}, register: requesting the network failed", e)
-            }
+        if (registered) return
+        try {
+            connectivity.requestNetwork(request, callback)
+            registered = true
+        } catch (e: Exception) {
+            LogUtil.e(AppConfig.TAG, "NetworkMonitor: Failed to request network", e)
         }
     }
 
     /**
-     * Stops watching and drops the tracked state. Safe to call more than once. No handover is claimed once
-     * it has returned: it closes the gate first, waiting for a claim under way, see [claimHandover].
+     * Stops watching and drops the tracked state. Safe to call more than once.
      */
     fun unregister() {
-        synchronized(lock) {
-            // PattNG: closed under the lock it was opened under; a claim never takes this lock, so the wait is short.
-            gate.close()
-            handoverJob?.cancel()
-            handoverJob = null
-            handoverScope.coroutineContext.cancelChildren()
-            upstream = null
-            if (!registered) return
-            registered = false
-        }
+        handoverJob?.cancel()
+        handoverJob = null
+        upstream = null
+        if (!registered) return
+        registered = false
         try {
             connectivity.unregisterNetworkCallback(callback)
         } catch (e: Exception) {
-            LogUtil.w(AppConfig.TAG, "NetworkMonitor: ${describe()}, unregister: unregistering the callback failed", e)
+            LogUtil.w(AppConfig.TAG, "NetworkMonitor: Failed to unregister callback", e)
         }
     }
 
     private fun scheduleHandover(network: Network) {
         LogUtil.i(AppConfig.TAG, "NetworkMonitor: Upstream is now $network")
-        synchronized(lock) {
-            // PattNG: a network callback that arrives after unregister() schedules nothing.
-            if (!registered) return
-            handoverJob?.cancel()
-            handoverJob = handoverScope.launch {
-                try {
-                    delay(HANDOVER_DEBOUNCE_MS)
-                    // PattNG: cancelling ends the wait above, not a handover that has just come out of it. The handover
-                    // goes on only once claimed under the gate, which unregister() closes first: an unregistered monitor
-                    // claims nothing and calls nothing.
-                    gate.runClaimed({ claimHandover(this@NetworkMonitor) }) { onHandover(this@NetworkMonitor) }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    LogUtil.e(AppConfig.TAG, "NetworkMonitor: ${describe()}, handover: handling the upstream change failed", e)
-                }
+        handoverJob?.cancel()
+        handoverJob = CoroutineScope(Dispatchers.IO).launch {
+            try {
+                delay(HANDOVER_DEBOUNCE_MS)
+                onHandover()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                LogUtil.e(AppConfig.TAG, "NetworkMonitor: Failed to handle upstream change", e)
             }
         }
     }

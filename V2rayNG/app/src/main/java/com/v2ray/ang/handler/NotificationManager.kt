@@ -266,7 +266,7 @@ object NotificationManager {
 
         CoreServiceManager.queryAllOutboundTrafficStats().forEach { stat ->
             when {
-                // PattNG: the Aether core's tunnel, the traffic of the outbound that dials it a second time.
+                // the Aether core's tunnel, the traffic of the outbound that dials it a second time.
                 stat.tag == AppConfig.TAG_EXIT_NODE -> Unit
 
                 stat.tag == AppConfig.TAG_DIRECT -> {

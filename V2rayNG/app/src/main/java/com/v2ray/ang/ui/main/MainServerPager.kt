@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -27,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,15 +34,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
@@ -56,8 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.v2ray.ang.R
 import com.v2ray.ang.dto.LocateTarget
 import com.v2ray.ang.dto.entities.ProfileItem
-import com.v2ray.ang.dto.entities.SubscriptionUsageInfo
-import com.v2ray.ang.ui.compose.ItemDivider
+import com.v2ray.ang.ui.compose.LocalDarkTheme
 import com.v2ray.ang.ui.compose.ReorderableGridItem
 import com.v2ray.ang.ui.compose.ReorderableListItem
 import com.v2ray.ang.ui.compose.colorConfigType
@@ -84,9 +80,6 @@ fun GroupPagerPage(
     onShareServer: (String, ProfileItem) -> Unit,
     onMoreServer: (String, ProfileItem) -> Unit,
     onRemoveServer: (String, String) -> Unit,
-    usageInfo: SubscriptionUsageInfo?,
-    groupTitle: String,
-    onOpenLink: (String) -> Unit,
     contentPadding: PaddingValues
 ) {
     val groupStateFlow = remember(groupId) {
@@ -109,50 +102,22 @@ fun GroupPagerPage(
             remove = onRemoveServer,
         )
     }
-    // The box floats over the list (the list scrolls underneath it), so the list is padded by the box height.
-    val density = LocalDensity.current
-    val layoutDirection = LocalLayoutDirection.current
-    var infoHeightPx by remember { mutableIntStateOf(0) }
-    val listPadding = if (usageInfo == null) {
-        contentPadding
-    } else {
-        PaddingValues(
-            start = contentPadding.calculateStartPadding(layoutDirection),
-            top = contentPadding.calculateTopPadding() + with(density) { infoHeightPx.toDp() },
-            end = contentPadding.calculateEndPadding(layoutDirection),
-            bottom = contentPadding.calculateBottomPadding()
-        )
-    }
-
-    Box(Modifier.fillMaxSize()) {
-        ServerListPage(
-            rows = groupState.rows,
-            selectedGuid = selectedGuid,
-            locateTarget = locateTarget?.takeIf { it.groupId == groupId },
-            canReorder = canReorder,
-            doubleColumnDisplay = doubleColumnDisplay,
-            groupId = groupId,
-            lazyListStates = lazyListStates,
-            lazyGridStates = lazyGridStates,
-            actions = actions,
-            onLocateHandled = { mainViewModel.onAction(MainAction.LocateHandled) },
-            onMoveServer = { fromGuid, toGuid ->
-                mainViewModel.onAction(MainAction.MoveServer(groupId, fromGuid, toGuid))
-            },
-            contentPadding = listPadding
-        )
-        if (usageInfo != null) {
-            SubscriptionInfoCard(
-                info = usageInfo,
-                fallbackTitle = groupTitle,
-                onOpenLink = onOpenLink,
-                onRefresh = { mainViewModel.onAction(MainAction.UpdateGroupSubscription(groupId)) },
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .onSizeChanged { infoHeightPx = it.height }
-            )
-        }
-    }
+    ServerListPage(
+        rows = groupState.rows,
+        selectedGuid = selectedGuid,
+        locateTarget = locateTarget?.takeIf { it.groupId == groupId },
+        canReorder = canReorder,
+        doubleColumnDisplay = doubleColumnDisplay,
+        groupId = groupId,
+        lazyListStates = lazyListStates,
+        lazyGridStates = lazyGridStates,
+        actions = actions,
+        onLocateHandled = { mainViewModel.onAction(MainAction.LocateHandled) },
+        onMoveServer = { fromIndex, toIndex ->
+            mainViewModel.moveServer(groupId, fromIndex, toIndex)
+        },
+        contentPadding = contentPadding
+    )
 }
 
 private class ServerRowActions(
@@ -175,7 +140,7 @@ private fun ServerListPage(
     lazyGridStates: MutableMap<String, LazyGridState>,
     actions: ServerRowActions,
     onLocateHandled: () -> Unit,
-    onMoveServer: (fromGuid: String, toGuid: String) -> Unit,
+    onMoveServer: (Int, Int) -> Unit,
     contentPadding: PaddingValues
 ) {
     if (doubleColumnDisplay) {
@@ -184,8 +149,7 @@ private fun ServerListPage(
         }
         val reorderableGridState = if (canReorder) {
             rememberReorderableLazyGridState(gridState) { from, to ->
-                // PattNG: by the keys of the rows, their guids, not by their positions.
-                onMoveServer(from.key as? String ?: return@rememberReorderableLazyGridState, to.key as? String ?: return@rememberReorderableLazyGridState)
+                onMoveServer(from.index, to.index)
             }
         } else null
 
@@ -229,8 +193,7 @@ private fun ServerListPage(
         }
         val reorderableState = if (canReorder) {
             rememberReorderableLazyListState(listState) { from, to ->
-                // PattNG: by the keys of the rows, their guids, not by their positions.
-                onMoveServer(from.key as? String ?: return@rememberReorderableLazyListState, to.key as? String ?: return@rememberReorderableLazyListState)
+                onMoveServer(from.index, to.index)
             }
         } else null
 
@@ -259,7 +222,6 @@ private fun ServerListPage(
                                 actions = actions
                             )
                         }
-                        ItemDivider()
                     }
                 } else {
                     ServerItemRow(
@@ -267,7 +229,6 @@ private fun ServerListPage(
                         isSelected = row.guid == selectedGuid,
                         actions = actions
                     )
-                    ItemDivider()
                 }
             }
         }
@@ -327,15 +288,21 @@ private fun ServerItemColumn(
     doubleColumnDisplay: Boolean,
     actions: ServerRowActions
 ) {
-    Column {
-        ServerListItem(
-            row = row,
-            isSelected = isSelected,
-            doubleColumnDisplay = doubleColumnDisplay,
-            actions = actions
-        )
-        ItemDivider()
-    }
+    ServerListItem(
+        row = row,
+        isSelected = isSelected,
+        doubleColumnDisplay = doubleColumnDisplay,
+        actions = actions
+    )
+}
+
+private fun protocolLabel(profile: ProfileItem): String = when (val name = profile.configType.name) {
+    "SHADOWSOCKS" -> "SS"
+    "HYSTERIA2" -> "HY2"
+    "WIREGUARD" -> "WG"
+    "POLICYGROUP" -> "GROUP"
+    "PROXYCHAIN" -> "CHAIN"
+    else -> name
 }
 
 @Composable
@@ -345,126 +312,170 @@ private fun ServerListItem(
     doubleColumnDisplay: Boolean,
     actions: ServerRowActions
 ) {
-    val testResult = if (row.testDelayMillis == 0L) {
-        ""
-    } else {
-        stringResource(R.string.server_test_delay_value, row.testDelayMillis)
+    val testResult = when {
+        row.testDelayMillis == 0L -> ""
+        row.testDelayMillis < 0L -> stringResource(R.string.ping_timeout)
+        else -> stringResource(R.string.server_test_delay_value, row.testDelayMillis)
     }
     val selectedStateDescription = if (isSelected) {
         stringResource(R.string.acc_selected_server)
     } else {
         null
     }
+    val scheme = MaterialTheme.colorScheme
+    val isDark = LocalDarkTheme.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 5.dp)
             .height(IntrinsicSize.Min)
             .semantics {
                 if (selectedStateDescription != null) {
                     stateDescription = selectedStateDescription
                 }
             }
-            .clickable { actions.select(row.guid) }
     ) {
+        // Protocol tab, a separate block next to the card
         Box(
-            Modifier
-                .width(10.dp)
+            modifier = Modifier
+                .width(30.dp)
                 .fillMaxHeight()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (isSelected) scheme.primary else scheme.surfaceVariant),
+            contentAlignment = Alignment.Center
         ) {
-            if (isSelected) {
-                Row {
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        Modifier
-                            .width(4.dp)
-                            .fillMaxHeight()
-                            .padding(vertical = 10.dp)
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
-                }
-            }
+            Text(
+                text = protocolLabel(row.profile),
+                color = if (isSelected) scheme.onPrimary else scheme.onSurface,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier
+                    .wrapContentWidth(unbounded = true)
+                    .graphicsLayer { rotationZ = -90f }
+            )
         }
+        Spacer(modifier = Modifier.width(6.dp))
 
-        Column(
-            Modifier
+        Row(
+            modifier = Modifier
                 .weight(1f)
-                .padding(start = 8.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(14.dp))
+                .background(if (isSelected) scheme.primaryContainer else scheme.surface)
+                .clickable { actions.select(row.guid) }
         ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(row.remarks, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge.copy(lineBreak = LineBreak.Paragraph), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (doubleColumnDisplay) {
-                    IconButton(onClick = { actions.more(row.guid, row.profile) }, Modifier.size(36.dp)) {
-                        Icon(
-                            painterResource(R.drawable.ic_more_vert_24dp),
-                            stringResource(R.string.acc_more),
-                            Modifier.size(24.dp)
-                        )
-                    }
-                } else {
-                    IconButton(onClick = { actions.share(row.guid, row.profile) }, Modifier.size(36.dp)) {
-                        Icon(
-                            painterResource(R.drawable.ic_share_24dp),
-                            stringResource(R.string.title_configuration_share),
-                            Modifier.size(24.dp)
-                        )
-                    }
-                    IconButton(onClick = { actions.edit(row.guid, row.profile) }, Modifier.size(36.dp)) {
-                        Icon(
-                            painterResource(R.drawable.ic_edit_24dp),
-                            stringResource(R.string.acc_edit),
-                            Modifier.size(24.dp)
-                        )
-                    }
-                    IconButton(onClick = { actions.remove(row.guid, row.remarks) }, Modifier.size(36.dp)) {
-                        Icon(
-                            painterResource(R.drawable.ic_delete_24dp),
-                            stringResource(R.string.acc_delete),
-                            Modifier.size(24.dp)
-                        )
-                    }
-                }
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (row.subscriptionBadge.isNotBlank()) {
-                    Box(
-                        Modifier
-                            .size(24.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)), Alignment.Center
-                    ) {
-                        Text(row.subscriptionBadge.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(start = 12.dp, end = 8.dp, top = 10.dp, bottom = 10.dp)
+            ) {
                 Text(
-                    row.statistics,
-                    Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    row.remarks,
+                    style = MaterialTheme.typography.bodyLarge.copy(lineBreak = LineBreak.Paragraph),
+                    color = if (isSelected) scheme.onPrimaryContainer else scheme.onSurface,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (row.subscriptionBadge.isNotBlank()) {
+                        Box(
+                            Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(scheme.primary.copy(alpha = 0.2f)), Alignment.Center
+                        ) {
+                            Text(row.subscriptionBadge.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = scheme.primary)
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(
+                        row.statistics,
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSelected) scheme.onPrimaryContainer.copy(alpha = 0.75f) else scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (testResult.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val pingColor = if (row.testDelayMillis < 0L) colorPingRed else colorPing
+                        Text(
+                            testResult,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(pingColor.copy(alpha = if (isDark) 0.28f else 0.18f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = pingColor,
+                            maxLines = 1
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     row.typeDescription,
-                    modifier = Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = colorConfigType,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    testResult,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (row.testDelayMillis < 0L) colorPingRed else colorPing,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+            }
+
+            if (doubleColumnDisplay) {
+                IconButton(
+                    onClick = { actions.more(row.guid, row.profile) },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_more_vert_24dp),
+                        stringResource(R.string.acc_more),
+                        Modifier.size(22.dp),
+                        tint = scheme.onSurface
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .background(if (isDark) Color(0xFF3A3B44) else Color(0xFF2B2B30))
+                        .padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    RowActionButton(R.drawable.ic_edit_24dp, stringResource(R.string.acc_edit)) {
+                        actions.edit(row.guid, row.profile)
+                    }
+                    RowActionButton(R.drawable.ic_share_24dp, stringResource(R.string.title_configuration_share)) {
+                        actions.share(row.guid, row.profile)
+                    }
+                    RowActionButton(R.drawable.ic_delete_24dp, stringResource(R.string.acc_delete)) {
+                        actions.remove(row.guid, row.remarks)
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun RowActionButton(iconRes: Int, description: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFF2F2F7))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = description,
+            tint = Color(0xFF2B2B30),
+            modifier = Modifier.size(16.dp)
+        )
     }
 }
 

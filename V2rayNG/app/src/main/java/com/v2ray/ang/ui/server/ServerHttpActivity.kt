@@ -13,7 +13,7 @@ class ServerHttpActivity : BaseServerActivity() {
     override val serverConfigType: EConfigType = EConfigType.HTTP
 
     @Composable
-    override fun EditorContent() {
+    override fun ScreenContent() {
         val scope = rememberCoroutineScope()
         val uiState = rememberSaveable(saver = ServerUiState.Saver) {
             ServerUiState.from(

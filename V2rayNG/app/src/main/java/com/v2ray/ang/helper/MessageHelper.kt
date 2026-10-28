@@ -109,11 +109,9 @@ object MessageHelper {
      *
      * @param ctx The context.
      * @param message The subscription service message containing key and subId.
-     * @return PattNG: whether the system took the message, which a start in the background it refuses is not; no
-     * acknowledgement of the service.
      */
-    fun sendMsg2SubscriptionService(ctx: Context, message: SubscriptionUpdateMessage): Boolean {
-        return try {
+    fun sendMsg2SubscriptionService(ctx: Context, message: SubscriptionUpdateMessage) {
+        try {
             val intent = Intent()
             intent.component = ComponentName(ctx, SubscriptionUpdateService::class.java)
             intent.putExtra("content", message)
@@ -135,10 +133,8 @@ object MessageHelper {
                     ctx.startService(intent)
                 }
             }
-            true
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Failed to send message to subscription service", e)
-            false
         }
     }
 

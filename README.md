@@ -1,25 +1,13 @@
-# PattNG
+# Matixray
 
-v2rayNG fork for Iranians
+A fast and simple proxy client for Android.
 
-**تغییرات v2rayNG:**
+The Android project lives in the `V2rayNG` folder and can be opened directly in Android Studio
+or built with the Gradle wrapper:
 
-* اضافه شدن cipherSuites و فینگرپرینت unsafe در تنظیمات و شیرلینک.
+```
+cd V2rayNG
+./gradlew assembleRelease
+```
 
-* اضافه شدن هسته‌ی aether
-
-**تغییرات Xray-core:**
-
-* امکان اتصال به کانفیگ‌های غیر رمزنگاری شده برای آدرس‌های عمومی در VLESS و TROJAN
-
-## حمایت
-
-اگر کارهای بنده باعث دسترسی شما به اینترنت آزاد شده است ممنون میشم حمایتی هم از اینجانب انجام دهید
-
-`USDT (BEP20)`: 0x76a768B53Ca77B43086946315f0BDF21156bF424
-
-`USDT (TRC20)`: TU5gKvKqcXPn8itp1DouBCwcqGHMemBm8o
-
-`TON (TON)`: UQAc-mZB3y7uxWHKiMmq0ORZEYgycWDWZ4V1k73HsXvTJx-i
-
-@patterniha
+The native cores (Xray library, Aether, tunnel) are expected in `V2rayNG/app/libs`.
