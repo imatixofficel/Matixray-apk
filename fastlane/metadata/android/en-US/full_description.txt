@@ -1,0 +1,11 @@
+<p>Matixray is a fast, lightweight proxy client for Android with a clean interface.</p>
+
+<h3>Features</h3>
+
+<ul>
+<li>Import configs from QR code, clipboard, files or subscriptions</li>
+<li>Group configs by subscription and update every group at once</li>
+<li>One-tap latency test for all configs</li>
+<li>Flexible routing rules and per-app proxy</li>
+<li>Light and dark themes</li>
+</ul>
