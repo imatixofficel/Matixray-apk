@@ -2,6 +2,12 @@ package com.v2ray.ang.ui
 
 import android.os.Bundle
 import android.webkit.WebView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -52,7 +58,8 @@ fun AboutScreen(onBackClick: () -> Unit) {
     val context = LocalContext.current
     var showOssDialog by remember { mutableStateOf(false) }
 
-    val libVersion = CoreNativeManager.getLibVersion()
+    // Keep only the version numbers: drop any "owner/" prefix in front of the core name.
+    val libVersion = CoreNativeManager.getLibVersion().replace(Regex("[A-Za-z0-9_.-]+/"), "")
     val versionText = "v${BuildConfig.VERSION_NAME} ($libVersion)"
     val appIdText = BuildConfig.APPLICATION_ID
 
@@ -71,6 +78,27 @@ fun AboutScreen(onBackClick: () -> Unit) {
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
+            Text(
+                text = stringResource(R.string.about_bismillah),
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.primary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 12.dp)
+            )
+            Text(
+                text = stringResource(R.string.about_description),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(20.dp)
+            )
+            Spacer(modifier = Modifier.height(12.dp))
             SettingsMenuItem(
                 icon = painterResource(R.drawable.license_24px),
                 title = stringResource(R.string.title_oss_license),

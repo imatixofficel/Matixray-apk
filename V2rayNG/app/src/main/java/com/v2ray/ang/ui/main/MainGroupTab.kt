@@ -1,6 +1,13 @@
 package com.v2ray.ang.ui.main
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.draw.rotate
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Column
 import com.v2ray.ang.R
 import androidx.compose.ui.res.stringResource
@@ -98,66 +105,86 @@ private fun GroupTabItem(
     )
 }
 
-/** Card for the group that is on screen: name, number of configs, a ping button and the group menu. */
+/**
+ * Parent card of one group (subscription): a chevron that folds the group, its name, how many
+ * configs it holds, a ping button and the group menu. Laid out left to right like the reference.
+ */
 @Composable
 fun GroupHeaderCard(
     group: GroupMapItem,
-    mainViewModel: MainViewModel,
+    count: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     onPingGroup: () -> Unit,
     onMoreMenuAction: (MainMoreMenuAction) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val serverFlow = remember(group.id, mainViewModel) { mainViewModel.serversForGroup(group.id) }
-    val servers by serverFlow.collectAsStateWithLifecycle()
     var showMenu by remember { mutableStateOf(false) }
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 0f else -90f,
+        animationSpec = tween(durationMillis = 250),
+        label = "groupChevron"
+    )
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "${group.remarks} (${servers.size})",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = stringResource(R.string.group_configs_count, servers.size),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
-        IconButton(onClick = onPingGroup) {
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .clickable(onClick = onToggle)
+                .padding(start = 8.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Icon(
-                painter = painterResource(R.drawable.ic_speed_24dp),
-                contentDescription = stringResource(R.string.action_ping_all),
-                tint = MaterialTheme.colorScheme.primary
+                painter = painterResource(R.drawable.ic_expand_more_24dp),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(horizontal = 8.dp)
+                    .size(26.dp)
+                    .rotate(rotation)
             )
-        }
-        Box {
-            IconButton(onClick = { showMenu = true }) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_more_vert_24dp),
-                    contentDescription = stringResource(R.string.acc_more),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = group.remarks,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = stringResource(R.string.group_configs_count, count),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
                 )
             }
-            DropdownMenu(
-                expanded = showMenu,
-                onDismissRequest = { showMenu = false },
-                containerColor = MaterialTheme.colorScheme.surface
-            ) {
-                MoreMenuContent { action ->
-                    showMenu = false
-                    onMoreMenuAction(action)
+            IconButton(onClick = onPingGroup) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_speed_24dp),
+                    contentDescription = stringResource(R.string.action_ping_all),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_more_vert_24dp),
+                        contentDescription = stringResource(R.string.acc_more),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    MoreMenuContent { action ->
+                        showMenu = false
+                        onMoreMenuAction(action)
+                    }
                 }
             }
         }

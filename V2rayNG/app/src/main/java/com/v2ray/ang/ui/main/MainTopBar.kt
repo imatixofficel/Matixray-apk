@@ -24,6 +24,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Surface
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -106,6 +110,30 @@ private fun ConfigsHeader(
     val maxMenuHeight = LocalConfiguration.current.screenHeightDp.dp - statusBarHeight - navBarHeight - 20.dp
     val accent = MaterialTheme.colorScheme.primary
 
+    if (showImportMenu) {
+        Dialog(onDismissRequest = { showImportMenu = false }) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 12.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = maxMenuHeight)
+                        .verticalScroll(importMenuScrollState)
+                        .padding(vertical = 12.dp)
+                ) {
+                    ImportMenuContent(
+                        onAction = { action ->
+                            showImportMenu = false
+                            onAction(action)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -116,51 +144,49 @@ private fun ConfigsHeader(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { onAction(MainAction.ImportQRcode) }) {
+            IconButton(
+                onClick = { onAction(MainAction.ImportQRcode) },
+                modifier = Modifier.size(52.dp)
+            ) {
                 Icon(
                     painterResource(R.drawable.ic_scan_24dp),
                     contentDescription = stringResource(R.string.menu_item_import_config_qrcode),
-                    tint = accent
+                    tint = accent,
+                    modifier = Modifier.size(32.dp)
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
-            IconButton(onClick = { onSearchToggle(true) }) {
+            IconButton(
+                onClick = { onSearchToggle(true) },
+                modifier = Modifier.size(52.dp)
+            ) {
                 Icon(
                     painterResource(R.drawable.ic_search_24dp),
                     contentDescription = stringResource(R.string.acc_search),
-                    tint = accent
+                    tint = accent,
+                    modifier = Modifier.size(30.dp)
                 )
             }
-            Box(modifier = Modifier.wrapContentSize(Alignment.TopEnd)) {
-                IconButton(onClick = { showImportMenu = true }) {
-                    Icon(
-                        painterResource(R.drawable.ic_add_24dp),
-                        contentDescription = stringResource(R.string.acc_add),
-                        tint = accent
-                    )
-                }
-                DropdownMenu(
-                    expanded = showImportMenu,
-                    onDismissRequest = { showImportMenu = false },
-                    scrollState = importMenuScrollState,
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier
-                        .heightIn(max = maxMenuHeight)
-                        .verticalScrollbar(importMenuScrollState)
-                ) {
-                    ImportMenuContent(
-                        onAction = { action ->
-                            showImportMenu = false
-                            onAction(action)
-                        }
-                    )
-                }
+            IconButton(
+                onClick = { showImportMenu = true },
+                modifier = Modifier.size(52.dp)
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_add_24dp),
+                    contentDescription = stringResource(R.string.acc_add),
+                    tint = accent,
+                    modifier = Modifier.size(32.dp)
+                )
             }
-            IconButton(onClick = { onNavigate(MainDestination.Subscriptions) }) {
+            IconButton(
+                onClick = { onNavigate(MainDestination.Subscriptions) },
+                modifier = Modifier.size(52.dp)
+            ) {
                 Icon(
                     painterResource(R.drawable.ic_configs_24dp),
                     contentDescription = stringResource(R.string.title_sub_setting),
-                    tint = accent
+                    tint = accent,
+                    modifier = Modifier.size(30.dp)
                 )
             }
         }
@@ -195,7 +221,10 @@ private fun ConfigsHeader(
                     iconRes = null,
                     text = stringResource(R.string.action_ping_all),
                     color = accent,
-                    onClick = { onAction(MainAction.TestRealAllServers) }
+                    onClick = {
+                        onAction(MainAction.SelectGroup(""))
+                        onAction(MainAction.TestRealAllServers)
+                    }
                 )
                 IconButton(onClick = onOpenSettingsTab) {
                     Icon(

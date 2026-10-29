@@ -2,6 +2,15 @@ package com.v2ray.ang.ui.main
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.foundation.lazy.items
+import com.v2ray.ang.dto.GroupMapItem
+import com.v2ray.ang.dto.ProfileItem
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -312,6 +321,20 @@ private fun ServerListItem(
     doubleColumnDisplay: Boolean,
     actions: ServerRowActions
 ) {
+    // The row is laid out left to right like the reference (tab, card, buttons) in every language;
+    // the text inside still follows its own script.
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        ServerListItemContent(row, isSelected, doubleColumnDisplay, actions)
+    }
+}
+
+@Composable
+private fun ServerListItemContent(
+    row: ServerRowUiModel,
+    isSelected: Boolean,
+    doubleColumnDisplay: Boolean,
+    actions: ServerRowActions
+) {
     val testResult = when {
         row.testDelayMillis == 0L -> ""
         row.testDelayMillis < 0L -> stringResource(R.string.ping_timeout)
@@ -492,5 +515,110 @@ internal suspend fun PagerState.navigateToPageOptimized(
         animateScrollToPage(target)
     } else {
         scrollToPage(target)
+    }
+}
+
+/**
+ * Every group is a parent card that folds open and closed; its configs are listed below it.
+ * New subscriptions simply appear as another group in this list.
+ */
+@Composable
+fun GroupedServerList(
+    groups: List<GroupMapItem>,
+    mainViewModel: MainViewModel,
+    selectedGuid: String?,
+    locateTarget: LocateTarget?,
+    onSelectGroup: (String) -> Unit,
+    onPingGroup: (String) -> Unit,
+    onGroupMenuAction: (String, MainMoreMenuAction) -> Unit,
+    onSelectServer: (String) -> Unit,
+    onEditServer: (String, ProfileItem) -> Unit,
+    onShareServer: (String, ProfileItem) -> Unit,
+    onMoreServer: (String, ProfileItem) -> Unit,
+    onRemoveServer: (String, String) -> Unit,
+    onLocateHandled: () -> Unit,
+    contentPadding: PaddingValues,
+    modifier: Modifier = Modifier
+) {
+    val rowsByGroup = HashMap<String, List<ServerRowUiModel>>()
+    groups.forEach { group ->
+        key(group.id) {
+            val flow = remember(group.id, mainViewModel) { mainViewModel.serverGroupState(group.id) }
+            val state by flow.collectAsStateWithLifecycle()
+            rowsByGroup[group.id] = state.rows
+        }
+    }
+
+    var collapsed by remember { mutableStateOf(emptySet<String>()) }
+    val listState = remember { LazyListState() }
+
+    val actions = remember(onSelectServer, onEditServer, onShareServer, onMoreServer, onRemoveServer) {
+        ServerRowActions(
+            select = onSelectServer,
+            edit = onEditServer,
+            share = onShareServer,
+            more = onMoreServer,
+            remove = onRemoveServer,
+        )
+    }
+
+    if (locateTarget != null) {
+        LaunchedEffect(locateTarget, groups, collapsed, rowsByGroup[locateTarget.groupId]?.size) {
+            if (locateTarget.groupId in collapsed) {
+                collapsed = collapsed - locateTarget.groupId
+                return@LaunchedEffect
+            }
+            var index = 0
+            var found = -1
+            for (group in groups) {
+                index++ // the group card itself
+                val rows = rowsByGroup[group.id].orEmpty()
+                if (group.id == locateTarget.groupId) {
+                    val position = rows.indexOfFirst { it.guid == locateTarget.serverGuid }
+                    if (position >= 0) found = index + position
+                    break
+                }
+                if (group.id !in collapsed) index += rows.size
+            }
+            if (found < 0) return@LaunchedEffect
+            listState.scrollToItem(found, -listState.layoutInfo.viewportSize.height / 3)
+            onLocateHandled()
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScrollbar(listState),
+        contentPadding = contentPadding
+    ) {
+        groups.forEach { group ->
+            val rows = rowsByGroup[group.id].orEmpty()
+            val isExpanded = group.id !in collapsed
+            item(key = "group-${group.id}") {
+                GroupHeaderCard(
+                    group = group,
+                    count = rows.size,
+                    expanded = isExpanded,
+                    onToggle = {
+                        onSelectGroup(group.id)
+                        collapsed = if (isExpanded) collapsed + group.id else collapsed - group.id
+                    },
+                    onPingGroup = { onPingGroup(group.id) },
+                    onMoreMenuAction = { action -> onGroupMenuAction(group.id, action) }
+                )
+            }
+            if (isExpanded) {
+                items(items = rows, key = { row -> "${group.id}|${row.guid}" }) { row ->
+                    ServerListItem(
+                        row = row,
+                        isSelected = row.guid == selectedGuid,
+                        doubleColumnDisplay = false,
+                        actions = actions
+                    )
+                }
+            }
+        }
     }
 }

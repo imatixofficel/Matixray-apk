@@ -775,4 +775,6 @@
     <string name="update_failed_title">Download failed</string>
     <string name="update_failed_message">The update could not be downloaded. Check your connection and try again.</string>
     <string name="group_configs_count">%1$d configs</string>
+    <string name="about_bismillah">In the name of God</string>
+    <string name="about_description">Matixray is a fast, lightweight proxy client for Android. Its look blends the V2Ray and V2Box themes: rounded cards, a three-tab bottom bar and a sky-blue accent.\n\nImport configs from a QR code, the clipboard, a file or a subscription link. Every subscription is its own group that you can fold open or closed, and all of them refresh automatically each time you open the app. Test the latency of one group or of everything at once, choose routing rules, proxy only the apps you pick, and use light or dark mode.\n\nWhen a new version is published, the app tells you and can download the right file for your phone after you confirm.</string>
 </resources>

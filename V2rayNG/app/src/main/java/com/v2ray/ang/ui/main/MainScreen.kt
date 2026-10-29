@@ -74,42 +74,6 @@ fun MainScreen(
         }
     }
 
-    val pagerState = rememberPagerState(
-        initialPage = 0,
-        pageCount = { groups.size.coerceAtLeast(1) }
-    )
-
-    val lazyListStates = remember { mutableStateMapOf<String, LazyListState>() }
-    val lazyGridStates = remember { mutableStateMapOf<String, LazyGridState>() }
-
-    LaunchedEffect(groups) {
-        val validGroupIds = groups.map { it.id }.toSet()
-        lazyListStates.keys.retainAll(validGroupIds)
-        lazyGridStates.keys.retainAll(validGroupIds)
-    }
-
-    LaunchedEffect(groups, uiState.selectedGroupId) {
-        if (groups.isEmpty()) return@LaunchedEffect
-        val selectedIndex = groups.indexOfFirst { it.id == uiState.selectedGroupId }
-            .takeIf { it >= 0 } ?: 0
-        if (!pagerState.isScrollInProgress && pagerState.settledPage != selectedIndex) {
-            pagerState.scrollToPage(selectedIndex)
-        }
-    }
-
-    val latestGroups by rememberUpdatedState(groups)
-
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }
-            .distinctUntilChanged()
-            .collect { page ->
-                val currentGroups = latestGroups
-                if (page in currentGroups.indices) {
-                    onAction(MainAction.SelectGroup(currentGroups[page].id))
-                }
-            }
-    }
-
     UpdateDialog(
         state = updateState,
         onDownload = updateViewModel::startDownload,
@@ -218,70 +182,33 @@ fun MainScreen(
             )
 
             MainTab.Configs -> if (groups.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                ) {
-                    if (groups.size > 1) GroupTabBar(
-                        groups = groups,
-                        selectedTabIndex = pagerState.currentPage.coerceIn(0, groups.lastIndex),
-                        mainViewModel = mainViewModel,
-                        onTabClick = { targetIndex ->
-                            scope.launch {
-                                pagerState.navigateToPageOptimized(
-                                    targetPage = targetIndex,
-                                    animateAdjacentPage = true
-                                )
-                            }
-                        }
-                    )
-
-                    groups.getOrNull(pagerState.currentPage)?.let { currentGroup ->
-                        GroupHeaderCard(
-                            group = currentGroup,
-                            mainViewModel = mainViewModel,
-                            onPingGroup = { onAction(MainAction.TestRealAllServers) },
-                            onMoreMenuAction = handleMoreMenu
-                        )
-                    }
-
-                    HorizontalPager(
-                        state = pagerState,
-                        modifier = Modifier.fillMaxSize(),
-                        userScrollEnabled = true,
-                        beyondViewportPageCount = 1,
-                        key = { page -> groups.getOrNull(page)?.id ?: "group-page-$page" }
-                    ) { page ->
-                        val group = groups.getOrNull(page) ?: return@HorizontalPager
-
-                        GroupPagerPage(
-                            groupId = group.id,
-                            mainViewModel = mainViewModel,
-                            selectedGuid = selectedGuid,
-                            locateTarget = uiState.locateTarget,
-                            doubleColumnDisplay = doubleColumnDisplay,
-                            searchQuery = searchQuery,
-                            lazyListStates = lazyListStates,
-                            lazyGridStates = lazyGridStates,
-                            onSelectServer = { guid -> onAction(MainAction.SelectServer(guid)) },
-                            onEditServer = { guid, profile -> onAction(MainAction.EditServer(guid, profile)) },
-                            onShareServer = { guid, profile ->
-                                shareTarget = Triple(guid, profile, false)
-                            },
-                            onMoreServer = { guid, profile ->
-                                shareTarget = Triple(guid, profile, true)
-                            },
-                            onRemoveServer = removeServer,
-                            contentPadding = PaddingValues(
-                                start = 0.dp,
-                                top = 0.dp,
-                                end = 0.dp,
-                                bottom = 12.dp
-                            )
-                        )
-                    }
-                }
+                GroupedServerList(
+                    groups = groups,
+                    mainViewModel = mainViewModel,
+                    selectedGuid = selectedGuid,
+                    locateTarget = uiState.locateTarget,
+                    onSelectGroup = { groupId -> onAction(MainAction.SelectGroup(groupId)) },
+                    onPingGroup = { groupId ->
+                        onAction(MainAction.SelectGroup(groupId))
+                        onAction(MainAction.TestRealAllServers)
+                    },
+                    onGroupMenuAction = { groupId, action ->
+                        onAction(MainAction.SelectGroup(groupId))
+                        handleMoreMenu(action)
+                    },
+                    onSelectServer = { guid -> onAction(MainAction.SelectServer(guid)) },
+                    onEditServer = { guid, profile -> onAction(MainAction.EditServer(guid, profile)) },
+                    onShareServer = { guid, profile ->
+                        shareTarget = Triple(guid, profile, false)
+                    },
+                    onMoreServer = { guid, profile ->
+                        shareTarget = Triple(guid, profile, true)
+                    },
+                    onRemoveServer = removeServer,
+                    onLocateHandled = { onAction(MainAction.LocateHandled) },
+                    contentPadding = PaddingValues(bottom = 12.dp),
+                    modifier = Modifier.padding(innerPadding)
+                )
             } else {
             }
         }
